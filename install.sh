@@ -3,10 +3,9 @@
 # Configuration
 REPO_URL="https://github.com/smaghili/dnsproxy.git"
 INSTALL_DIR="/etc/dnsproxy"
-SCRIPT_PATH="/usr/local/bin/dns_proxy.py"  # نام فایل پایتون صحیح
+SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
 SERVICE_NAME="dnsproxy"
 WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
-LOG_FILE="/var/log/dnsproxy.log"
 DNS_PORT=53
 
 # Function to run commands
@@ -140,7 +139,6 @@ set_google_dns() {
         echo "Google DNS is already set."
     fi
 }
-
 # Function to create systemd service
 create_systemd_service() {
     local service_file="/etc/systemd/system/dnsproxy.service"
@@ -215,8 +213,10 @@ stop_service() {
 show_status() {
     if systemctl is-active --quiet dnsproxy; then
         echo "DNSProxy is running."
+        systemctl status dnsproxy
     else
         echo "DNSProxy is not running."
+        systemctl status dnsproxy
     fi
 }
 
@@ -226,8 +226,15 @@ whitelist_start() {
         echo "Whitelist file not found. Creating an empty one."
         run_command touch "$WHITELIST_FILE"
     fi
-    echo "Starting DNSProxy service with whitelist..."
-    run_command systemctl stop dnsproxy
+    echo "Stopping current DNSProxy service..."
+    stop_service
+
+    echo "Removing old systemd service file..."
+    if [ -f "/etc/systemd/system/dnsproxy.service" ]; then
+        run_command rm /etc/systemd/system/dnsproxy.service
+    fi
+
+    echo "Creating new systemd service with whitelist..."
     create_systemd_service_with_whitelist
     start_service
 }
@@ -295,5 +302,3 @@ case "$1" in
         usage
         ;;
 esac
-
-exit 0

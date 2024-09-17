@@ -11,18 +11,18 @@ PID_FILE="/var/run/dnsproxy.pid"
 LOG_FILE="/var/log/dnsproxy.log"
 DNS_PORT=53
 
-# Function to run commands
+# Function to run commands with or without sudo based on current user
 run_command() {
-    if [ "$2" = "capture_output" ]; then
-        sudo "$1" 2>&1
+    if [ "$(id -u)" -ne 0 ]; then
+        sudo "$@"
     else
-        sudo "$1"
+        "$@"
     fi
 }
 
 # Function to check if a package is installed
 is_installed() {
-    dpkg -l "$1" | grep -q '^ii'
+    dpkg -l "$1" 2>/dev/null | grep -q '^ii'
 }
 
 # Function to install required packages
@@ -31,13 +31,13 @@ install_packages() {
     for package in "${packages[@]}"; do
         if ! is_installed "$package"; then
             echo "Installing $package..."
-            run_command "apt-get update"
-            run_command "apt-get install -y $package"
+            run_command apt-get update
+            run_command apt-get install -y "$package"
         fi
     done
     
     # Install Python packages
-    run_command "pip3 install dnslib aiodns"
+    run_command pip3 install dnslib aiodns
 }
 
 # Function to clone and install the project
@@ -45,18 +45,18 @@ clone_and_install() {
     echo "Cloning the project from GitHub..."
     if [ -d "$INSTALL_DIR" ]; then
         echo "Installation directory already exists. Removing it..."
-        run_command "rm -rf $INSTALL_DIR"
+        run_command rm -rf "$INSTALL_DIR"
     fi
-    run_command "git clone $REPO_URL $INSTALL_DIR"
+    run_command git clone "$REPO_URL" "$INSTALL_DIR"
     
     echo "Installing DNS proxy script..."
-    run_command "cp $INSTALL_DIR/dns_proxy.py $PYTHON_SCRIPT_PATH"
-    run_command "cp $0 $SCRIPT_PATH"
-    run_command "chmod +x $SCRIPT_PATH $PYTHON_SCRIPT_PATH"
+    run_command cp "$INSTALL_DIR/dns_proxy.py" "$PYTHON_SCRIPT_PATH"
+    run_command cp "$0" "$SCRIPT_PATH"
+    run_command chmod +x "$SCRIPT_PATH" "$PYTHON_SCRIPT_PATH"
     
     echo "Setting up whitelist file..."
     if [ ! -f "$WHITELIST_FILE" ]; then
-        run_command "touch $WHITELIST_FILE"
+        run_command touch "$WHITELIST_FILE"
     fi
 }
 
@@ -94,13 +94,13 @@ stream {
 }
 "
     echo "Creating Nginx configuration..."
-    echo "$nginx_conf" | sudo tee /etc/nginx/nginx.conf > /dev/null
-    run_command "systemctl restart nginx"
+    echo "$nginx_conf" | run_command tee /etc/nginx/nginx.conf > /dev/null
+    run_command systemctl restart nginx
 }
 
 # Function to get server IP
 get_server_ip() {
-    local ip_address=$(run_command "hostname -I | awk '{print \$1}'" capture_output)
+    local ip_address=$(hostname -I | awk '{print $1}')
     if [ -z "$ip_address" ]; then
         echo "Could not determine the server's IP address." >&2
         exit 1
@@ -112,16 +112,16 @@ get_server_ip() {
 check_and_stop_services_using_port() {
     local port=$1
     echo "Checking for services using port $port..."
-    if run_command "ss -tuln | grep :$port" capture_output > /dev/null; then
+    if ss -tuln | grep -q ":$port "; then
         echo "Port $port is in use. Attempting to stop related services..."
-        local process_ids=$(run_command "lsof -ti:$port" capture_output)
+        local process_ids=$(lsof -ti:"$port")
         if [ -n "$process_ids" ]; then
             for pid in $process_ids; do
                 echo "Stopping process with PID $pid"
-                run_command "kill -9 $pid"
+                run_command kill -9 "$pid"
             done
         fi
-        run_command "systemctl stop systemd-resolved"
+        run_command systemctl stop systemd-resolved
     else
         echo "Port $port is not in use."
     fi
@@ -131,10 +131,10 @@ check_and_stop_services_using_port() {
 set_google_dns() {
     echo "Setting Google DNS..."
     local google_dns="nameserver 8.8.8.8\nnameserver 8.8.4.4"
-    local current_dns=$(run_command "grep nameserver /etc/resolv.conf" capture_output)
+    local current_dns=$(grep nameserver /etc/resolv.conf)
     if [ -z "$current_dns" ] || ! echo "$current_dns" | grep -q "8.8.8.8"; then
         echo "Updating DNS settings..."
-        echo -e "$google_dns" | sudo tee /etc/resolv.conf > /dev/null
+        echo -e "$google_dns" | run_command tee /etc/resolv.conf > /dev/null
     else
         echo "Google DNS is already set."
     fi
@@ -156,21 +156,21 @@ start_service() {
     if [ "$1" = "--whitelist" ]; then
         if [ ! -f "$WHITELIST_FILE" ]; then
             echo "Whitelist file not found. Creating an empty one."
-            sudo touch "$WHITELIST_FILE"
+            run_command touch "$WHITELIST_FILE"
         fi
         cmd+=" --whitelist $WHITELIST_FILE"
     fi
 
-    sudo nohup $cmd > "$LOG_FILE" 2>&1 &
-    echo $! | sudo tee "$PID_FILE" > /dev/null
+    run_command nohup $cmd > "$LOG_FILE" 2>&1 &
+    echo $! | run_command tee "$PID_FILE" > /dev/null
     echo "DNSProxy started."
 }
 
 # Function to stop the service
 stop_service() {
     if [ -f "$PID_FILE" ]; then
-        sudo kill $(cat "$PID_FILE")
-        sudo rm -f "$PID_FILE"
+        run_command kill $(cat "$PID_FILE")
+        run_command rm -f "$PID_FILE"
         echo "DNSProxy stopped."
     else
         echo "DNSProxy is not running."

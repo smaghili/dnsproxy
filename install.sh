@@ -11,66 +11,41 @@ PID_FILE="/var/run/dnsproxy.pid"
 LOG_FILE="/var/log/dnsproxy.log"
 DNS_PORT=53
 
-# Check if script is run as root
-if [ "$(id -u)" -ne 0 ]; then
-    echo "This script must be run as root" >&2
-    exit 1
-fi
+# Function to run commands
+run_command() {
+    if [ "$2" = "capture_output" ]; then
+        sudo "$1" 2>&1
+    else
+        sudo "$1"
+    fi
+}
+
+# Function to check if a package is installed
+check_installed() {
+    dpkg -l "$1" | grep -q '^ii'
+}
 
 # Function to install required packages
 install_packages() {
-    local packages_to_install=()
-    for package in nginx python3-pip git; do
-        if ! dpkg -l | grep -q "^ii  $package "; then
-            packages_to_install+=("$package")
+    local packages=("nginx" "python3-pip" "git")
+    for package in "${packages[@]}"; do
+        if ! check_installed "$package"; then
+            echo "Installing $package..."
+            run_command "apt-get update"
+            run_command "apt-get install -y $package"
         fi
     done
-
-    if [ ${#packages_to_install[@]} -ne 0 ]; then
-        echo "Installing packages: ${packages_to_install[*]}"
-        apt-get update
-        apt-get install -y "${packages_to_install[@]}"
-    else
-        echo "All required system packages are already installed."
-    fi
-
+    
     # Install Python packages
-    echo "Checking and installing required Python packages..."
-    pip3 install --upgrade pip
-    pip3 install --no-warn-script-location dnslib dnspython cachetools
-
-    # Verify Python packages installation
-    if ! python3 -c "import dnslib, dns, cachetools" 2>/dev/null; then
-        echo "Error: Failed to install required Python packages. Please check your internet connection and try again."
-        exit 1
-    fi
-    echo "All required Python packages are installed successfully."
+    run_command "pip3 install dnslib aiodns"
 }
 
-# Function to clone and install the project
-clone_and_install() {
-    if [ -d "$INSTALL_DIR" ]; then
-        echo "Updating existing installation..."
-        cd "$INSTALL_DIR"
-        git pull
-    else
-        echo "Cloning the project..."
-        git clone "$REPO_URL" "$INSTALL_DIR"
-    fi
-    cp "$INSTALL_DIR/dns_proxy.py" "$PYTHON_SCRIPT_PATH"
-    cp "$0" "$SCRIPT_PATH"
-    chmod +x "$SCRIPT_PATH" "$PYTHON_SCRIPT_PATH"
-    [ ! -f "$WHITELIST_FILE" ] && touch "$WHITELIST_FILE"
-}
-
-# Function to create optimized Nginx configuration
+# Function to create Nginx configuration
 create_nginx_config() {
-    cat > /etc/nginx/nginx.conf <<EOL
-user www-data;
+    local nginx_conf="
 worker_processes auto;
 worker_rlimit_nofile 65535;
-pid /run/nginx.pid;
-include /etc/nginx/modules-enabled/*.conf;
+load_module /usr/lib/nginx/modules/ngx_stream_module.so;
 
 events {
     worker_connections 65535;
@@ -79,27 +54,6 @@ events {
 }
 
 http {
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-    server_tokens off;
-
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-
-    access_log /var/log/nginx/access.log;
-    error_log /var/log/nginx/error.log;
-
-    gzip on;
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_buffers 16 8k;
-    gzip_http_version 1.1;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
-
     server {
         listen 80 default_server;
         listen [::]:80 default_server;
@@ -109,97 +63,96 @@ http {
 }
 
 stream {
-    upstream backend {
-        server 127.0.0.1:8443;
-    }
-
     server {
+        resolver 1.1.1.1 ipv6=off;
         listen 443;
-        proxy_pass backend;
         ssl_preread on;
+        proxy_pass \$ssl_preread_server_name:443;
         proxy_buffer_size 16k;
         proxy_socket_keepalive on;
-        tcp_nodelay on;
     }
 }
-EOL
-    systemctl restart nginx
+"
+    echo "Creating Nginx configuration..."
+    echo "$nginx_conf" | sudo tee /etc/nginx/nginx.conf > /dev/null
+    run_command "systemctl restart nginx"
 }
 
-# Function to set Google DNS and fix hostname resolution
-set_dns_and_hostname() {
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo "nameserver 8.8.4.4" >> /etc/resolv.conf
-    hostname_ip=$(hostname -I | awk '{print $1}')
-    hostname_name=$(hostname)
-    if ! grep -q "$hostname_name" /etc/hosts; then
-        echo "$hostname_ip $hostname_name" >> /etc/hosts
+# Function to get server IP
+get_server_ip() {
+    local ip_address=$(run_command "hostname -I | awk '{print \$1}'" capture_output)
+    if [ -z "$ip_address" ]; then
+        echo "Could not determine the server's IP address." >&2
+        exit 1
     fi
+    echo "$ip_address"
 }
 
 # Function to check and stop services using port
 check_and_stop_services_using_port() {
     local port=$1
-    if ss -tuln | grep -q ":$port "; then
-        echo "Port $port is in use. Stopping related services..."
-        systemctl stop systemd-resolved
-        kill $(lsof -t -i:$port) 2>/dev/null
+    echo "Checking for services using port $port..."
+    if run_command "ss -tuln | grep :$port" capture_output > /dev/null; then
+        echo "Port $port is in use. Attempting to stop related services..."
+        local process_ids=$(run_command "lsof -ti:$port" capture_output)
+        if [ -n "$process_ids" ]; then
+            for pid in $process_ids; do
+                echo "Stopping process with PID $pid"
+                run_command "kill -9 $pid"
+            done
+        fi
+        run_command "systemctl stop systemd-resolved"
+    else
+        echo "Port $port is not in use."
+    fi
+}
+
+# Function to set Google DNS
+set_google_dns() {
+    echo "Setting Google DNS..."
+    local google_dns="nameserver 8.8.8.8\nnameserver 8.8.4.4"
+    local current_dns=$(run_command "grep nameserver /etc/resolv.conf" capture_output)
+    if [ -z "$current_dns" ] || ! echo "$current_dns" | grep -q "8.8.8.8"; then
+        echo "Updating DNS settings..."
+        echo -e "$google_dns" | sudo tee /etc/resolv.conf > /dev/null
+    else
+        echo "Google DNS is already set."
     fi
 }
 
 # Function to start the service
 start_service() {
     if [ -f "$PID_FILE" ]; then
-        if ps -p $(cat "$PID_FILE") > /dev/null 2>&1; then
-            echo "DNSProxy is already running."
-            return
-        else
-            echo "Stale PID file found. Removing it."
-            rm -f "$PID_FILE"
-        fi
+        echo "DNSProxy is already running."
+        return
     fi
 
     check_and_stop_services_using_port $DNS_PORT
-    set_dns_and_hostname
+    set_google_dns
 
-    local ip_address=$(hostname -I | awk '{print $1}')
-    local cmd="python3 $PYTHON_SCRIPT_PATH --ip $ip_address --port $DNS_PORT --dns-allow-all"
+    local ip_address=$(get_server_ip)
+    local cmd="python3 $PYTHON_SCRIPT_PATH --ip $ip_address --port $DNS_PORT"
     
-    echo "Starting DNSProxy in allow-all mode."
-    nohup $cmd > "$LOG_FILE" 2>&1 &
-    local pid=$!
-    echo $pid > "$PID_FILE"
-    
-    sleep 2
-    if ps -p $pid > /dev/null 2>&1; then
-        echo "DNSProxy started successfully with PID $pid."
-        if ! lsof -i :53 | grep -q LISTEN; then
-            echo "Warning: DNSProxy is running but not listening on port 53."
-            echo "Check $LOG_FILE for errors."
-            tail -n 20 "$LOG_FILE"
+    if [ "$1" = "--whitelist" ]; then
+        if [ ! -f "$WHITELIST_FILE" ]; then
+            echo "Whitelist file not found. Creating an empty one."
+            sudo touch "$WHITELIST_FILE"
         fi
+        cmd+=" --whitelist $WHITELIST_FILE"
     else
-        echo "Failed to start DNSProxy. Check $LOG_FILE for errors."
-        tail -n 20 "$LOG_FILE"
+        cmd+=" --dns-allow-all"
     fi
+
+    sudo nohup $cmd > "$LOG_FILE" 2>&1 &
+    echo $! | sudo tee "$PID_FILE" > /dev/null
+    echo "DNSProxy started."
 }
 
 # Function to stop the service
 stop_service() {
     if [ -f "$PID_FILE" ]; then
-        local pid=$(cat "$PID_FILE")
-        if ps -p $pid > /dev/null 2>&1; then
-            echo "Stopping DNSProxy..."
-            kill $pid
-            sleep 2
-            if ps -p $pid > /dev/null 2>&1; then
-                echo "DNSProxy did not stop gracefully. Forcing stop."
-                kill -9 $pid
-            fi
-        else
-            echo "DNSProxy is not running, but PID file exists. Cleaning up."
-        fi
-        rm -f "$PID_FILE"
+        sudo kill $(cat "$PID_FILE")
+        sudo rm -f "$PID_FILE"
         echo "DNSProxy stopped."
     else
         echo "DNSProxy is not running."
@@ -209,58 +162,46 @@ stop_service() {
 # Function to show the status
 show_status() {
     if [ -f "$PID_FILE" ]; then
-        local pid=$(cat "$PID_FILE")
-        if ps -p $pid > /dev/null 2>&1; then
-            echo "DNSProxy is running with PID $pid."
-            if lsof -i :53 | grep -q LISTEN; then
-                echo "DNSProxy is listening on port 53."
-            else
-                echo "Warning: DNSProxy is running but not listening on port 53."
-            fi
-        else
-            echo "DNSProxy is not running, but a stale PID file exists."
-        fi
+        echo "DNSProxy is running."
     else
         echo "DNSProxy is not running."
     fi
 }
 
 # Main script logic
-if [ $# -eq 0 ]; then
-    install_packages
-    clone_and_install
-    create_nginx_config
-    set_dns_and_hostname
-    stop_service  # Ensure any existing instance is stopped
-    start_service
-    show_status
-else
-    case "$1" in
-        start)
-            start_service
-            ;;
-        stop)
-            stop_service
-            ;;
-        restart)
-            stop_service
-            start_service
-            ;;
-        status)
-            show_status
-            ;;
-        --whitelist)
-            if [ "$2" = "start" ]; then
-                start_service --whitelist
-            else
-                echo "Usage: $0 --whitelist start"
-            fi
-            ;;
-        *)
-            echo "Usage: $0 {start|stop|restart|status|--whitelist start}"
-            exit 1
-            ;;
-    esac
-fi
+case "$1" in
+    install)
+        install_packages
+        create_nginx_config
+        set_google_dns
+        check_and_stop_services_using_port $DNS_PORT
+        start_service
+        echo "Installation and setup completed."
+        ;;
+    start)
+        start_service
+        ;;
+    stop)
+        stop_service
+        ;;
+    restart)
+        stop_service
+        start_service
+        ;;
+    status)
+        show_status
+        ;;
+    --whitelist)
+        if [ "$2" = "start" ]; then
+            start_service --whitelist
+        else
+            echo "Usage: $0 --whitelist start"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {install|start|stop|restart|status|--whitelist start}"
+        exit 1
+        ;;
+esac
 
 exit 0

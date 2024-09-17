@@ -1,5 +1,5 @@
 import asyncio
-import dns.resolver
+import dnspython as dns
 from dnslib import DNSRecord, RR, A, QTYPE
 import argparse
 import signal

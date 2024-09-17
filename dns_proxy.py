@@ -6,8 +6,9 @@ import signal
 import socket
 
 class DNSServer:
-    def __init__(self, proxy_ip, whitelist=None, port=53):
-        self.proxy_ip = proxy_ip
+    def __init__(self, ip_address, allow_all=False, whitelist=None, port=53):
+        self.ip_address = ip_address
+        self.allow_all = allow_all
         self.whitelist = whitelist or []
         self.port = port
         self.resolver = None
@@ -24,14 +25,6 @@ class DNSServer:
         except aiodns.error.DNSError:
             return None
 
-    async def resolve_domain_with_system_dns(self, domain):
-        try:
-            real_ip = socket.gethostbyname(domain)
-            return real_ip
-        except Exception as e:
-            print(f"Error resolving domain with system DNS {domain}: {e}")
-            return None
-
     async def handle_dns_request(self, data, addr):
         try:
             packet = DNSRecord.parse(data)
@@ -39,13 +32,12 @@ class DNSServer:
                 requested_domain_name = str(question.qname).rstrip('.')
                 reply_packet = packet.reply()
 
-                if any(domain in requested_domain_name for domain in self.whitelist):
-                    # Domain is in whitelist, return proxy IP
-                    reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(self.proxy_ip), ttl=60))
+                if self.allow_all or any(domain in requested_domain_name for domain in self.whitelist):
+                    # Return the server IP for all domains when allow_all is True or domain is in whitelist
+                    reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(self.ip_address), ttl=60))
                 else:
-                    # Domain is not in whitelist, resolve using system DNS (Google DNS)
-                    resolved_ip = await self.resolve_domain_with_system_dns(requested_domain_name)
-                    
+                    # Resolve normally for non-whitelisted domains when not in allow_all mode
+                    resolved_ip = await self.resolve_domain(requested_domain_name)
                     if resolved_ip:
                         reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(resolved_ip), ttl=60))
                     else:
@@ -83,8 +75,6 @@ class DNSServer:
         )
 
         print(f"DNS server started on port {self.port} and is running in the background.")
-        print(f"Proxy IP: {self.proxy_ip}")
-        print(f"Whitelisted domains: {', '.join(self.whitelist)}")
 
         try:
             await asyncio.Future()  # Run forever
@@ -98,20 +88,21 @@ class DNSServer:
             self.transport.close()
         print("DNS server stopped.")
 
-async def run_dns_server(proxy_ip, whitelist, port):
-    server = DNSServer(proxy_ip, whitelist=whitelist, port=port)
+async def run_dns_server(ip_address, allow_all, whitelist, port):
+    server = DNSServer(ip_address, allow_all=allow_all, whitelist=whitelist, port=port)
     await server.run_server()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='DNS Proxy Server')
-    parser.add_argument('--ip', required=True, help='Proxy IP address')
+    parser.add_argument('--ip', required=True, help='Server IP address')
     parser.add_argument('--port', type=int, default=53, help='DNS server port')
+    parser.add_argument('--dns-allow-all', action='store_true', help='Allow all DNS requests')
     parser.add_argument('--whitelist', type=str, help='Path to whitelist file')
     args = parser.parse_args()
 
     whitelist = []
-    if args.whitelist:
+    if not args.dns_allow_all and args.whitelist:
         with open(args.whitelist, 'r') as f:
             whitelist = [line.strip() for line in f if line.strip()]
 
-    asyncio.run(run_dns_server(args.ip, whitelist, args.port))
+    asyncio.run(run_dns_server(args.ip, args.dns_allow_all, whitelist, args.port))

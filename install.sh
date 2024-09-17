@@ -21,7 +21,7 @@ fi
 install_packages() {
     apt-get update
     apt-get install -y nginx python3-pip git
-    pip3 install dnslib aiodns
+    pip3 install dnslib dnspython cachetools
 }
 
 # Function to clone and install the project
@@ -36,12 +36,14 @@ clone_and_install() {
     touch "$WHITELIST_FILE"
 }
 
-# Function to create Nginx configuration
+# Function to create optimized Nginx configuration
 create_nginx_config() {
     cat > /etc/nginx/nginx.conf <<EOL
+user www-data;
 worker_processes auto;
 worker_rlimit_nofile 65535;
-load_module /usr/lib/nginx/modules/ngx_stream_module.so;
+pid /run/nginx.pid;
+include /etc/nginx/modules-enabled/*.conf;
 
 events {
     worker_connections 65535;
@@ -50,6 +52,27 @@ events {
 }
 
 http {
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    server_tokens off;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_buffers 16 8k;
+    gzip_http_version 1.1;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
     server {
         listen 80 default_server;
         listen [::]:80 default_server;
@@ -59,13 +82,17 @@ http {
 }
 
 stream {
+    upstream backend {
+        server 127.0.0.1:8443;
+    }
+
     server {
-        resolver 1.1.1.1 ipv6=off;
         listen 443;
+        proxy_pass backend;
         ssl_preread on;
-        proxy_pass \$ssl_preread_server_name:443;
         proxy_buffer_size 16k;
         proxy_socket_keepalive on;
+        tcp_nodelay on;
     }
 }
 EOL
@@ -113,20 +140,9 @@ start_service() {
     set_dns_and_hostname
 
     local ip_address=$(hostname -I | awk '{print $1}')
-    local cmd="python3 $PYTHON_SCRIPT_PATH --ip $ip_address --port $DNS_PORT"
+    local cmd="python3 $PYTHON_SCRIPT_PATH --ip $ip_address --port $DNS_PORT --dns-allow-all"
     
-    if [ "$1" = "--whitelist" ]; then
-        if [ ! -f "$WHITELIST_FILE" ]; then
-            echo "Whitelist file not found. Creating an empty one."
-            touch "$WHITELIST_FILE"
-        fi
-        cmd+=" --whitelist $WHITELIST_FILE"
-        echo "Starting DNSProxy in whitelist mode."
-    else
-        cmd+=" --dns-allow-all"
-        echo "Starting DNSProxy in allow-all mode."
-    fi
-
+    echo "Starting DNSProxy in allow-all mode."
     nohup $cmd > "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     echo "DNSProxy started."
@@ -153,40 +169,41 @@ show_status() {
 }
 
 # Main script logic
-case "$1" in
-    install)
-        install_packages
-        clone_and_install
-        create_nginx_config
-        set_dns_and_hostname
-        start_service
-        echo "Installation and setup completed."
-        echo "DNSProxy is now running in allow-all mode."
-        ;;
-    start)
-        start_service
-        ;;
-    stop)
-        stop_service
-        ;;
-    restart)
-        stop_service
-        start_service
-        ;;
-    status)
-        show_status
-        ;;
-    --whitelist)
-        if [ "$2" = "start" ]; then
-            start_service --whitelist
-        else
-            echo "Usage: $0 --whitelist start"
-        fi
-        ;;
-    *)
-        echo "Usage: $0 {install|start|stop|restart|status|--whitelist start}"
-        exit 1
-        ;;
-esac
+if [ $# -eq 0 ]; then
+    # If no arguments are provided, perform installation and start the service
+    install_packages
+    clone_and_install
+    create_nginx_config
+    set_dns_and_hostname
+    start_service
+    echo "Installation and setup completed. DNSProxy is now running in allow-all mode."
+else
+    case "$1" in
+        start)
+            start_service
+            ;;
+        stop)
+            stop_service
+            ;;
+        restart)
+            stop_service
+            start_service
+            ;;
+        status)
+            show_status
+            ;;
+        --whitelist)
+            if [ "$2" = "start" ]; then
+                start_service --whitelist
+            else
+                echo "Usage: $0 --whitelist start"
+            fi
+            ;;
+        *)
+            echo "Usage: $0 {start|stop|restart|status|--whitelist start}"
+            exit 1
+            ;;
+    esac
+fi
 
 exit 0

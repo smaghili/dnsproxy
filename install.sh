@@ -11,15 +11,6 @@ PID_FILE="/var/run/dnsproxy.pid"
 LOG_FILE="/var/log/dnsproxy.log"
 DNS_PORT=53
 
-# Function to run commands with or without sudo based on current user
-run_command() {
-    if [ "$(id -u)" -ne 0 ]; then
-        sudo "$@"
-    else
-        "$@"
-    fi
-}
-
 # Function to check if a package is installed
 is_installed() {
     dpkg -l "$1" 2>/dev/null | grep -q '^ii'
@@ -31,13 +22,13 @@ install_packages() {
     for package in "${packages[@]}"; do
         if ! is_installed "$package"; then
             echo "Installing $package..."
-            run_command apt-get update
-            run_command apt-get install -y "$package"
+            apt-get update
+            apt-get install -y "$package"
         fi
     done
     
     # Install Python packages
-    run_command pip3 install dnslib aiodns
+    pip3 install dnslib aiodns
 }
 
 # Function to clone and install the project
@@ -45,18 +36,18 @@ clone_and_install() {
     echo "Cloning the project from GitHub..."
     if [ -d "$INSTALL_DIR" ]; then
         echo "Installation directory already exists. Removing it..."
-        run_command rm -rf "$INSTALL_DIR"
+        rm -rf "$INSTALL_DIR"
     fi
-    run_command git clone "$REPO_URL" "$INSTALL_DIR"
+    git clone "$REPO_URL" "$INSTALL_DIR"
     
     echo "Installing DNS proxy script..."
-    run_command cp "$INSTALL_DIR/dns_proxy.py" "$PYTHON_SCRIPT_PATH"
-    run_command cp "$0" "$SCRIPT_PATH"
-    run_command chmod +x "$SCRIPT_PATH" "$PYTHON_SCRIPT_PATH"
+    cp "$INSTALL_DIR/dns_proxy.py" "$PYTHON_SCRIPT_PATH"
+    cp "$0" "$SCRIPT_PATH"
+    chmod +x "$SCRIPT_PATH" "$PYTHON_SCRIPT_PATH"
     
     echo "Setting up whitelist file..."
     if [ ! -f "$WHITELIST_FILE" ]; then
-        run_command touch "$WHITELIST_FILE"
+        touch "$WHITELIST_FILE"
     fi
 }
 
@@ -94,18 +85,13 @@ stream {
 }
 "
     echo "Creating Nginx configuration..."
-    echo "$nginx_conf" | run_command tee /etc/nginx/nginx.conf > /dev/null
-    run_command systemctl restart nginx
+    echo "$nginx_conf" > /etc/nginx/nginx.conf
+    systemctl restart nginx
 }
 
 # Function to get server IP
 get_server_ip() {
-    local ip_address=$(hostname -I | awk '{print $1}')
-    if [ -z "$ip_address" ]; then
-        echo "Could not determine the server's IP address." >&2
-        exit 1
-    fi
-    echo "$ip_address"
+    hostname -I | awk '{print $1}'
 }
 
 # Function to check and stop services using port
@@ -118,10 +104,10 @@ check_and_stop_services_using_port() {
         if [ -n "$process_ids" ]; then
             for pid in $process_ids; do
                 echo "Stopping process with PID $pid"
-                run_command kill -9 "$pid"
+                kill -9 "$pid"
             done
         fi
-        run_command systemctl stop systemd-resolved
+        systemctl stop systemd-resolved
     else
         echo "Port $port is not in use."
     fi
@@ -130,14 +116,8 @@ check_and_stop_services_using_port() {
 # Function to set Google DNS
 set_google_dns() {
     echo "Setting Google DNS..."
-    local google_dns="nameserver 8.8.8.8\nnameserver 8.8.4.4"
-    local current_dns=$(grep nameserver /etc/resolv.conf)
-    if [ -z "$current_dns" ] || ! echo "$current_dns" | grep -q "8.8.8.8"; then
-        echo "Updating DNS settings..."
-        echo -e "$google_dns" | run_command tee /etc/resolv.conf > /dev/null
-    else
-        echo "Google DNS is already set."
-    fi
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    echo "nameserver 8.8.4.4" >> /etc/resolv.conf
 }
 
 # Function to start the service
@@ -156,21 +136,21 @@ start_service() {
     if [ "$1" = "--whitelist" ]; then
         if [ ! -f "$WHITELIST_FILE" ]; then
             echo "Whitelist file not found. Creating an empty one."
-            run_command touch "$WHITELIST_FILE"
+            touch "$WHITELIST_FILE"
         fi
         cmd+=" --whitelist $WHITELIST_FILE"
     fi
 
-    run_command nohup $cmd > "$LOG_FILE" 2>&1 &
-    echo $! | run_command tee "$PID_FILE" > /dev/null
+    nohup $cmd > "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
     echo "DNSProxy started."
 }
 
 # Function to stop the service
 stop_service() {
     if [ -f "$PID_FILE" ]; then
-        run_command kill $(cat "$PID_FILE")
-        run_command rm -f "$PID_FILE"
+        kill $(cat "$PID_FILE")
+        rm -f "$PID_FILE"
         echo "DNSProxy stopped."
     else
         echo "DNSProxy is not running."
@@ -185,6 +165,12 @@ show_status() {
         echo "DNSProxy is not running."
     fi
 }
+
+# Check if script is run as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "This script must be run as root" >&2
+    exit 1
+fi
 
 # Main script logic
 case "$1" in

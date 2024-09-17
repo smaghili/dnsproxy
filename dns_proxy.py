@@ -1,9 +1,9 @@
 import asyncio
-import aiodns
+import dns.resolver
 from dnslib import DNSRecord, RR, A, QTYPE
 import argparse
 import signal
-import socket
+from cachetools import TTLCache
 
 class DNSServer:
     def __init__(self, ip_address, allow_all=False, whitelist=None, port=53):
@@ -11,18 +11,22 @@ class DNSServer:
         self.allow_all = allow_all
         self.whitelist = whitelist or []
         self.port = port
-        self.resolver = None
+        self.resolver = dns.resolver.Resolver()
+        self.resolver.nameservers = ['8.8.8.8', '8.8.4.4']  # Google DNS
+        self.cache = TTLCache(maxsize=10000, ttl=300)  # Cache for 5 minutes
         self.transport = None
         self.protocol = None
 
-    async def init_resolver(self):
-        self.resolver = aiodns.DNSResolver()
-
     async def resolve_domain(self, domain):
+        if domain in self.cache:
+            return self.cache[domain]
+        
         try:
-            result = await self.resolver.query(domain, 'A')
-            return result[0].host
-        except aiodns.error.DNSError:
+            answers = self.resolver.resolve(domain, 'A')
+            ip = answers[0].address
+            self.cache[domain] = ip
+            return ip
+        except Exception:
             return None
 
     async def handle_dns_request(self, data, addr):
@@ -33,10 +37,8 @@ class DNSServer:
                 reply_packet = packet.reply()
 
                 if self.allow_all or any(domain in requested_domain_name for domain in self.whitelist):
-                    # Return the server IP for all domains when allow_all is True or domain is in whitelist
                     reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(self.ip_address), ttl=60))
                 else:
-                    # Resolve normally for non-whitelisted domains when not in allow_all mode
                     resolved_ip = await self.resolve_domain(requested_domain_name)
                     if resolved_ip:
                         reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(resolved_ip), ttl=60))
@@ -50,8 +52,6 @@ class DNSServer:
             return None
 
     async def run_server(self):
-        await self.init_resolver()
-
         class DNSProtocol(asyncio.DatagramProtocol):
             def __init__(self, dns_server):
                 self.dns_server = dns_server

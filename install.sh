@@ -34,13 +34,17 @@ install_packages() {
         echo "All required system packages are already installed."
     fi
 
-    # Install Python packages only if not already installed
+    # Install Python packages
+    echo "Checking and installing required Python packages..."
+    pip3 install --upgrade pip
+    pip3 install --no-warn-script-location dnslib dnspython cachetools
+
+    # Verify Python packages installation
     if ! python3 -c "import dnslib, dns, cachetools" 2>/dev/null; then
-        echo "Installing required Python packages..."
-        pip3 install --no-warn-script-location dnslib dnspython cachetools
-    else
-        echo "All required Python packages are already installed."
+        echo "Error: Failed to install required Python packages. Please check your internet connection and try again."
+        exit 1
     fi
+    echo "All required Python packages are installed successfully."
 }
 
 # Function to clone and install the project

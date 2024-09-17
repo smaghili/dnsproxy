@@ -3,7 +3,7 @@
 # Configuration
 REPO_URL="https://github.com/smaghili/dnsproxy.git"
 INSTALL_DIR="/etc/dnsproxy"
-SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
+SCRIPT_PATH="/usr/local/bin/dns_proxy.py"  # نام فایل پایتون صحیح
 SERVICE_NAME="dnsproxy"
 WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
 DNS_PORT=53
@@ -59,8 +59,7 @@ setup_dns_proxy() {
 
 # Function to create Nginx configuration
 create_nginx_config() {
-    local nginx_conf="
-worker_processes auto;
+    local nginx_conf="worker_processes auto;
 worker_rlimit_nofile 65535;
 load_module /usr/lib/nginx/modules/ngx_stream_module.so;
 
@@ -139,12 +138,12 @@ set_google_dns() {
         echo "Google DNS is already set."
     fi
 }
+
 # Function to create systemd service
 create_systemd_service() {
     local service_file="/etc/systemd/system/dnsproxy.service"
     echo "Creating systemd service for DNSProxy..."
-    local service_content="
-[Unit]
+    local service_content="[Unit]
 Description=DNSProxy Service
 After=network.target
 
@@ -166,8 +165,7 @@ WantedBy=multi-user.target
 create_systemd_service_with_whitelist() {
     local service_file="/etc/systemd/system/dnsproxy.service"
     echo "Creating systemd service for DNSProxy with whitelist..."
-    local service_content="
-[Unit]
+    local service_content="[Unit]
 Description=DNSProxy Service with Whitelist
 After=network.target
 
@@ -202,10 +200,12 @@ start_service() {
 stop_service() {
     echo "Stopping DNSProxy service..."
     run_command systemctl stop dnsproxy
-    if [ $? -eq 0 ]; then
-        echo "DNSProxy service stopped successfully."
-    else
+    sleep 2
+    if systemctl is-active --quiet dnsproxy; then
         echo "Failed to stop DNSProxy service." >&2
+        exit 1
+    else
+        echo "DNSProxy service stopped successfully."
     fi
 }
 
@@ -213,10 +213,8 @@ stop_service() {
 show_status() {
     if systemctl is-active --quiet dnsproxy; then
         echo "DNSProxy is running."
-        systemctl status dnsproxy
     else
         echo "DNSProxy is not running."
-        systemctl status dnsproxy
     fi
 }
 
@@ -228,14 +226,10 @@ whitelist_start() {
     fi
     echo "Stopping current DNSProxy service..."
     stop_service
-
-    echo "Removing old systemd service file..."
-    if [ -f "/etc/systemd/system/dnsproxy.service" ]; then
-        run_command rm /etc/systemd/system/dnsproxy.service
-    fi
-
-    echo "Creating new systemd service with whitelist..."
+    echo "Removing existing systemd service file..."
+    run_command rm -f /etc/systemd/system/dnsproxy.service
     create_systemd_service_with_whitelist
+    echo "Starting DNSProxy service with whitelist..."
     start_service
 }
 
@@ -302,3 +296,5 @@ case "$1" in
         usage
         ;;
 esac
+
+exit 0

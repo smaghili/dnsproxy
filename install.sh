@@ -3,7 +3,8 @@
 # Configuration
 REPO_URL="https://github.com/smaghili/dnsproxy.git"
 INSTALL_DIR="/etc/dnsproxy"
-SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
+SCRIPT_PATH="/usr/local/bin/dnsproxy"
+PYTHON_SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
 SERVICE_NAME="dnsproxy"
 WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
 PID_FILE="/var/run/dnsproxy.pid"
@@ -49,8 +50,9 @@ clone_and_install() {
     run_command "git clone $REPO_URL $INSTALL_DIR"
     
     echo "Installing DNS proxy script..."
-    run_command "cp $INSTALL_DIR/dns_proxy.py $SCRIPT_PATH"
-    run_command "chmod +x $SCRIPT_PATH"
+    run_command "cp $INSTALL_DIR/dns_proxy.py $PYTHON_SCRIPT_PATH"
+    run_command "cp $0 $SCRIPT_PATH"
+    run_command "chmod +x $SCRIPT_PATH $PYTHON_SCRIPT_PATH"
     
     echo "Setting up whitelist file..."
     if [ ! -f "$WHITELIST_FILE" ]; then
@@ -149,7 +151,7 @@ start_service() {
     set_google_dns
 
     local ip_address=$(get_server_ip)
-    local cmd="python3 $SCRIPT_PATH --ip $ip_address --port $DNS_PORT"
+    local cmd="python3 $PYTHON_SCRIPT_PATH --ip $ip_address --port $DNS_PORT"
     
     if [ "$1" = "--whitelist" ]; then
         if [ ! -f "$WHITELIST_FILE" ]; then
@@ -191,6 +193,7 @@ case "$1" in
         clone_and_install
         create_nginx_config
         echo "Installation completed."
+        echo "You can now use 'dnsproxy' command to manage the service."
         ;;
     start)
         start_service

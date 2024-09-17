@@ -3,42 +3,59 @@
 # Configuration
 REPO_URL="https://github.com/smaghili/dnsproxy.git"
 INSTALL_DIR="/etc/dnsproxy"
-SCRIPT_PATH="/usr/local/bin/dnsproxy"
-PYTHON_SCRIPT_PATH="/usr/local/bin/dns_server.py"  # اطمینان از تطابق نام فایل
+SCRIPT_PATH="/usr/local/bin/dns_proxy.py"  # نام فایل پایتون صحیح
 SERVICE_NAME="dnsproxy"
 WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
-PID_FILE="/var/run/dnsproxy.pid"
 LOG_FILE="/var/log/dnsproxy.log"
 DNS_PORT=53
 
 # Function to run commands
 run_command() {
-    local cmd="$1"
-    if [ "$2" = "capture_output" ]; then
-        sudo bash -c "$cmd" 2>&1
-    else
-        sudo bash -c "$cmd"
-    fi
+    "$@"
 }
 
 # Function to check if a package is installed
 check_installed() {
-    dpkg -l "$1" | grep -q '^ii'
+    dpkg -l "$1" &> /dev/null
 }
 
 # Function to install required packages
 install_packages() {
-    local packages=("nginx" "python3-pip" "git")
+    echo "Checking if Nginx, Python3, pip3, and git are installed..."
+    local packages=("nginx" "python3" "python3-pip" "git")
+    local to_install=()
+
     for package in "${packages[@]}"; do
         if ! check_installed "$package"; then
-            echo "Installing $package..."
-            run_command "apt-get update"
-            run_command "apt-get install -y $package"
+            to_install+=("$package")
         fi
     done
-    
-    # Install Python packages
-    run_command "pip3 install dnslib aiodns"
+
+    if [ ${#to_install[@]} -ne 0 ]; then
+        echo "Installing packages: ${to_install[@]}..."
+        run_command apt-get update
+        run_command apt-get install -y "${to_install[@]}"
+    else
+        echo "All required packages are already installed."
+    fi
+
+    echo "Installing Python packages dnslib and aiodns..."
+    run_command pip3 install dnslib aiodns
+}
+
+# Function to clone the repository and set up the script
+setup_dns_proxy() {
+    echo "Cloning DNSProxy repository..."
+    if [ ! -d "$INSTALL_DIR" ]; then
+        run_command git clone "$REPO_URL" "$INSTALL_DIR"
+    else
+        echo "Install directory already exists. Pulling latest changes..."
+        run_command bash -c "cd $INSTALL_DIR && git pull"
+    fi
+
+    echo "Copying dns_proxy.py to $SCRIPT_PATH..."
+    run_command cp "$INSTALL_DIR/dns_proxy.py" "$SCRIPT_PATH"
+    run_command chmod +x "$SCRIPT_PATH"
 }
 
 # Function to create Nginx configuration
@@ -75,13 +92,14 @@ stream {
 }
 "
     echo "Creating Nginx configuration..."
-    echo "$nginx_conf" | sudo tee /etc/nginx/nginx.conf > /dev/null
-    run_command "systemctl restart nginx"
+    echo "$nginx_conf" > /etc/nginx/nginx.conf
+    run_command systemctl restart nginx
 }
 
 # Function to get server IP
 get_server_ip() {
-    local ip_address=$(run_command "hostname -I | awk '{print \$1}'" capture_output)
+    local ip_address
+    ip_address=$(hostname -I | awk '{print $1}')
     if [ -z "$ip_address" ]; then
         echo "Could not determine the server's IP address." >&2
         exit 1
@@ -93,16 +111,17 @@ get_server_ip() {
 check_and_stop_services_using_port() {
     local port=$1
     echo "Checking for services using port $port..."
-    if run_command "ss -tuln | grep :$port" capture_output > /dev/null; then
+    if ss -tuln | grep ":$port" &> /dev/null; then
         echo "Port $port is in use. Attempting to stop related services..."
-        local process_ids=$(run_command "lsof -ti:$port" capture_output)
+        local process_ids
+        process_ids=$(lsof -ti:$port)
         if [ -n "$process_ids" ]; then
             for pid in $process_ids; do
                 echo "Stopping process with PID $pid"
-                run_command "kill -9 $pid"
+                run_command kill -9 "$pid"
             done
         fi
-        run_command "systemctl stop systemd-resolved"
+        run_command systemctl stop systemd-resolved
     else
         echo "Port $port is not in use."
     fi
@@ -112,98 +131,142 @@ check_and_stop_services_using_port() {
 set_google_dns() {
     echo "Setting Google DNS..."
     local google_dns="nameserver 8.8.8.8\nnameserver 8.8.4.4"
-    local current_dns=$(run_command "grep nameserver /etc/resolv.conf" capture_output)
-    if [ -z "$current_dns" ] || ! echo "$current_dns" | grep -q "8.8.8.8"; then
-        echo "Updating DNS settings..."
-        echo -e "$google_dns" | sudo tee /etc/resolv.conf > /dev/null
+    local current_dns
+    current_dns=$(grep nameserver /etc/resolv.conf || true)
+    if [[ -z "$current_dns" || "$current_dns" != *"8.8.8.8"* ]]; then
+        echo -e "$google_dns" > /etc/resolv.conf
+        echo "Google DNS has been set."
     else
         echo "Google DNS is already set."
     fi
 }
 
+# Function to create systemd service
+create_systemd_service() {
+    local service_file="/etc/systemd/system/dnsproxy.service"
+    echo "Creating systemd service for DNSProxy..."
+    local service_content="
+[Unit]
+Description=DNSProxy Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $SCRIPT_PATH --ip $(get_server_ip) --port $DNS_PORT --dns-allow-all
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target
+"
+    echo "$service_content" > "$service_file"
+    run_command systemctl daemon-reload
+    run_command systemctl enable dnsproxy
+}
+
+# Function to create systemd service with whitelist
+create_systemd_service_with_whitelist() {
+    local service_file="/etc/systemd/system/dnsproxy.service"
+    echo "Creating systemd service for DNSProxy with whitelist..."
+    local service_content="
+[Unit]
+Description=DNSProxy Service with Whitelist
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $SCRIPT_PATH --ip $(get_server_ip) --port $DNS_PORT --whitelist $WHITELIST_FILE
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target
+"
+    echo "$service_content" > "$service_file"
+    run_command systemctl daemon-reload
+    run_command systemctl enable dnsproxy
+}
+
 # Function to start the service
 start_service() {
-    if [ -f "$PID_FILE" ]; then
-        echo "DNSProxy is already running."
-        return
-    fi
-
-    check_and_stop_services_using_port $DNS_PORT
-    set_google_dns
-
-    local ip_address=$(get_server_ip)
-    local cmd="python3 $PYTHON_SCRIPT_PATH --ip $ip_address --port $DNS_PORT"
-    
-    if [ "$1" = "--whitelist" ]; then
-        if [ ! -f "$WHITELIST_FILE" ]; then
-            echo "Whitelist file not found. Creating an empty one."
-            sudo touch "$WHITELIST_FILE"
-        fi
-        cmd+=" --whitelist $WHITELIST_FILE"
+    echo "Starting DNSProxy service..."
+    run_command systemctl start dnsproxy
+    sleep 2
+    if systemctl is-active --quiet dnsproxy; then
+        echo "DNSProxy service started successfully."
     else
-        cmd+=" --dns-allow-all"
+        echo "Failed to start DNSProxy service. Check the logs for details." >&2
+        exit 1
     fi
-
-    sudo nohup $cmd > "$LOG_FILE" 2>&1 &
-    echo $! | sudo tee "$PID_FILE" > /dev/null
-    echo "DNSProxy started."
 }
 
 # Function to stop the service
 stop_service() {
-    if [ -f "$PID_FILE" ]; then
-        sudo kill $(cat "$PID_FILE")
-        sudo rm -f "$PID_FILE"
-        echo "DNSProxy stopped."
+    echo "Stopping DNSProxy service..."
+    run_command systemctl stop dnsproxy
+    if [ $? -eq 0 ]; then
+        echo "DNSProxy service stopped successfully."
     else
-        echo "DNSProxy is not running."
+        echo "Failed to stop DNSProxy service." >&2
     fi
 }
 
 # Function to show the status
 show_status() {
-    if [ -f "$PID_FILE" ]; then
+    if systemctl is-active --quiet dnsproxy; then
         echo "DNSProxy is running."
     else
         echo "DNSProxy is not running."
     fi
 }
 
-# Function to clone the repository and set up the script
-setup_dns_proxy() {
-    echo "Cloning DNSProxy repository..."
-    if [ ! -d "$INSTALL_DIR" ]; then
-        run_command "git clone $REPO_URL $INSTALL_DIR"
-    else
-        echo "Install directory already exists. Pulling latest changes..."
-        run_command "cd $INSTALL_DIR && git pull"
+# Function to handle whitelist start
+whitelist_start() {
+    if [ ! -f "$WHITELIST_FILE" ]; then
+        echo "Whitelist file not found. Creating an empty one."
+        run_command touch "$WHITELIST_FILE"
     fi
+    echo "Starting DNSProxy service with whitelist..."
+    run_command systemctl stop dnsproxy
+    create_systemd_service_with_whitelist
+    start_service
+}
 
-    echo "Copying dns_server.py to $PYTHON_SCRIPT_PATH..."
-    run_command "cp $INSTALL_DIR/dns_server.py $PYTHON_SCRIPT_PATH"
-    run_command "chmod +x $PYTHON_SCRIPT_PATH"
+# Function to display usage
+usage() {
+    echo "Usage: $0 {install|start|stop|restart|status|--whitelist start}"
+    exit 1
 }
 
 # Main script logic
 
-# Install and run by default if no arguments provided
-if [ $# -eq 0 ]; then
+# Function to perform default install and start
+default_install_and_start() {
     echo "No arguments provided. Running default install and start service."
-    setup_dns_proxy
     install_packages
+    setup_dns_proxy
     create_nginx_config
+    set_google_dns
+    check_and_stop_services_using_port $DNS_PORT
+    create_systemd_service
     start_service
+}
+
+# Check if no arguments are provided
+if [ $# -eq 0 ]; then
+    default_install_and_start
     exit 0
 fi
 
 # Main command processing
 case "$1" in
     install)
-        setup_dns_proxy
         install_packages
+        setup_dns_proxy
         create_nginx_config
         set_google_dns
         check_and_stop_services_using_port $DNS_PORT
+        create_systemd_service
         start_service
         echo "Installation and setup completed."
         ;;
@@ -222,14 +285,14 @@ case "$1" in
         ;;
     --whitelist)
         if [ "$2" = "start" ]; then
-            start_service --whitelist
+            whitelist_start
         else
             echo "Usage: $0 --whitelist start"
+            exit 1
         fi
         ;;
     *)
-        echo "Usage: $0 {install|start|stop|restart|status|--whitelist start}"
-        exit 1
+        usage
         ;;
 esac
 

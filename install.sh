@@ -31,11 +31,16 @@ install_packages() {
         apt-get update
         apt-get install -y "${packages_to_install[@]}"
     else
-        echo "All required packages are already installed."
+        echo "All required system packages are already installed."
     fi
 
-    # Install Python packages
-    pip3 install --upgrade dnslib dnspython cachetools
+    # Install Python packages only if not already installed
+    if ! python3 -c "import dnslib, dns, cachetools" 2>/dev/null; then
+        echo "Installing required Python packages..."
+        pip3 install --no-warn-script-location dnslib dnspython cachetools
+    else
+        echo "All required Python packages are already installed."
+    fi
 }
 
 # Function to clone and install the project
@@ -56,7 +61,64 @@ clone_and_install() {
 
 # Function to create optimized Nginx configuration
 create_nginx_config() {
-    # ... (Nginx configuration remains the same)
+    cat > /etc/nginx/nginx.conf <<EOL
+user www-data;
+worker_processes auto;
+worker_rlimit_nofile 65535;
+pid /run/nginx.pid;
+include /etc/nginx/modules-enabled/*.conf;
+
+events {
+    worker_connections 65535;
+    multi_accept on;
+    use epoll;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    server_tokens off;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_buffers 16 8k;
+    gzip_http_version 1.1;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+    server {
+        listen 80 default_server;
+        listen [::]:80 default_server;
+        server_name _;
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+stream {
+    upstream backend {
+        server 127.0.0.1:8443;
+    }
+
+    server {
+        listen 443;
+        proxy_pass backend;
+        ssl_preread on;
+        proxy_buffer_size 16k;
+        proxy_socket_keepalive on;
+        tcp_nodelay on;
+    }
+}
+EOL
     systemctl restart nginx
 }
 

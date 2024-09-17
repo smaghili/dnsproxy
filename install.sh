@@ -4,7 +4,7 @@
 REPO_URL="https://github.com/smaghili/dnsproxy.git"
 INSTALL_DIR="/etc/dnsproxy"
 SCRIPT_PATH="/usr/local/bin/dnsproxy"
-PYTHON_SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
+PYTHON_SCRIPT_PATH="/usr/local/bin/dns_server.py"  # اطمینان از تطابق نام فایل
 SERVICE_NAME="dnsproxy"
 WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
 PID_FILE="/var/run/dnsproxy.pid"
@@ -13,10 +13,11 @@ DNS_PORT=53
 
 # Function to run commands
 run_command() {
+    local cmd="$1"
     if [ "$2" = "capture_output" ]; then
-        sudo "$1" 2>&1
+        sudo bash -c "$cmd" 2>&1
     else
-        sudo "$1"
+        sudo bash -c "$cmd"
     fi
 }
 
@@ -168,11 +169,27 @@ show_status() {
     fi
 }
 
+# Function to clone the repository and set up the script
+setup_dns_proxy() {
+    echo "Cloning DNSProxy repository..."
+    if [ ! -d "$INSTALL_DIR" ]; then
+        run_command "git clone $REPO_URL $INSTALL_DIR"
+    else
+        echo "Install directory already exists. Pulling latest changes..."
+        run_command "cd $INSTALL_DIR && git pull"
+    fi
+
+    echo "Copying dns_server.py to $PYTHON_SCRIPT_PATH..."
+    run_command "cp $INSTALL_DIR/dns_server.py $PYTHON_SCRIPT_PATH"
+    run_command "chmod +x $PYTHON_SCRIPT_PATH"
+}
+
 # Main script logic
 
 # Install and run by default if no arguments provided
 if [ $# -eq 0 ]; then
     echo "No arguments provided. Running default install and start service."
+    setup_dns_proxy
     install_packages
     create_nginx_config
     start_service
@@ -182,6 +199,7 @@ fi
 # Main command processing
 case "$1" in
     install)
+        setup_dns_proxy
         install_packages
         create_nginx_config
         set_google_dns

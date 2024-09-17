@@ -1,9 +1,9 @@
 import asyncio
-import dns.resolver
+import aiodns
 from dnslib import DNSRecord, RR, A, QTYPE
 import argparse
 import signal
-from cachetools import TTLCache
+import socket
 
 class DNSServer:
     def __init__(self, ip_address, allow_all=False, whitelist=None, port=53):
@@ -11,22 +11,26 @@ class DNSServer:
         self.allow_all = allow_all
         self.whitelist = whitelist or []
         self.port = port
-        self.resolver = dns.resolver.Resolver()
-        self.resolver.nameservers = ['8.8.8.8', '8.8.4.4']  # Google DNS
-        self.cache = TTLCache(maxsize=10000, ttl=300)  # Cache for 5 minutes
+        self.resolver = None
         self.transport = None
         self.protocol = None
 
+    async def init_resolver(self):
+        self.resolver = aiodns.DNSResolver()
+
     async def resolve_domain(self, domain):
-        if domain in self.cache:
-            return self.cache[domain]
-        
         try:
-            answers = self.resolver.resolve(domain, 'A')
-            ip = answers[0].address
-            self.cache[domain] = ip
-            return ip
-        except Exception:
+            result = await self.resolver.query(domain, 'A')
+            return result[0].host
+        except aiodns.error.DNSError:
+            return None
+
+    async def resolve_domain_with_system_dns(self, domain):
+        try:
+            real_ip = socket.gethostbyname(domain)  # Resolve using system's default resolver
+            return real_ip
+        except Exception as e:
+            print(f"Error resolving domain with system DNS {domain}: {e}")
             return None
 
     async def handle_dns_request(self, data, addr):
@@ -37,9 +41,15 @@ class DNSServer:
                 reply_packet = packet.reply()
 
                 if self.allow_all or any(domain in requested_domain_name for domain in self.whitelist):
+                    # Return the local IP if allowed or whitelisted
                     reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(self.ip_address), ttl=60))
                 else:
+                    # First try to resolve with aiodns
                     resolved_ip = await self.resolve_domain(requested_domain_name)
+                    if not resolved_ip:
+                        # If aiodns fails, fallback to system DNS
+                        resolved_ip = await self.resolve_domain_with_system_dns(requested_domain_name)
+                    
                     if resolved_ip:
                         reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(resolved_ip), ttl=60))
                     else:
@@ -52,6 +62,8 @@ class DNSServer:
             return None
 
     async def run_server(self):
+        await self.init_resolver()
+
         class DNSProtocol(asyncio.DatagramProtocol):
             def __init__(self, dns_server):
                 self.dns_server = dns_server
@@ -88,21 +100,62 @@ class DNSServer:
             self.transport.close()
         print("DNS server stopped.")
 
-async def run_dns_server(ip_address, allow_all, whitelist, port):
-    server = DNSServer(ip_address, allow_all=allow_all, whitelist=whitelist, port=port)
-    await server.run_server()
+class GracefulExit(SystemExit):
+    pass
+
+def raise_graceful_exit(*args):
+    raise GracefulExit()
+
+def handle_exit(loop, dns_server):
+    async def shutdown():
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        loop.stop()
+        if dns_server:
+            dns_server.stop_server()
+
+    loop.create_task(shutdown())
+    print("\nScript is stopping gracefully. Please wait...")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='DNS Proxy Server')
-    parser.add_argument('--ip', required=True, help='Server IP address')
-    parser.add_argument('--port', type=int, default=53, help='DNS server port')
-    parser.add_argument('--dns-allow-all', action='store_true', help='Allow all DNS requests')
-    parser.add_argument('--whitelist', type=str, help='Path to whitelist file')
-    args = parser.parse_args()
+    loop = asyncio.get_event_loop()
+    
+    class ServerContainer:
+        dns_server = None
 
-    whitelist = []
-    if not args.dns_allow_all and args.whitelist:
-        with open(args.whitelist, 'r') as f:
-            whitelist = [line.strip() for line in f if line.strip()]
+    server_container = ServerContainer()
 
-    asyncio.run(run_dns_server(args.ip, args.dns_allow_all, whitelist, args.port))
+    async def run_main():
+        parser = argparse.ArgumentParser(description='SNI Proxy with DNS')
+        parser.add_argument('--dns-allow-all', action='store_true', help='Allow all DNS requests')
+        parser.add_argument('--whitelist', type=str, help='Path to whitelist file')
+        parser.add_argument('--ip', required=True, help='Server IP address')
+        parser.add_argument('--port', type=int, default=53, help='DNS server port')
+        args = parser.parse_args()
+
+        whitelist = []
+        if not args.dns_allow_all and args.whitelist:
+            with open(args.whitelist, 'r') as f:
+                whitelist = [line.strip() for line in f if line.strip()]
+
+        server_container.dns_server = DNSServer(args.ip, allow_all=args.dns_allow_all, whitelist=whitelist, port=args.port)
+        await server_container.dns_server.run_server()
+
+    for sig in [signal.SIGINT, signal.SIGTERM]:
+        loop.add_signal_handler(sig, lambda: handle_exit(loop, server_container.dns_server))
+
+    try:
+        loop.run_until_complete(run_main())
+    except KeyboardInterrupt:
+        print("Received keyboard interrupt.")
+    except GracefulExit:
+        print("Received signal to exit gracefully.")
+    finally:
+        print("Cleaning up...")
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+        print("Script exited.")
+    
+    sys.exit(0)

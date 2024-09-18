@@ -3,7 +3,7 @@
 # Configuration
 REPO_URL="https://github.com/smaghili/dnsproxy.git"
 INSTALL_DIR="/etc/dnsproxy"
-SCRIPT_PATH="/usr/local/bin/dns_proxy.py"  # نام فایل پایتون صحیح
+SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
 SERVICE_NAME="dnsproxy"
 WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
 LOG_FILE="/var/log/dnsproxy.log"
@@ -189,33 +189,22 @@ WantedBy=multi-user.target
 
 # Function to start the service
 start_service() {
-    echo "Starting DNSProxy service..."
-    run_command systemctl start dnsproxy
-    sleep 2
-    if systemctl is-active --quiet dnsproxy; then
-        echo "DNSProxy service started successfully."
-    else
-        echo "Failed to start DNSProxy service. Check the logs for details." >&2
-        exit 1
-    fi
+    systemctl start dnsproxy.service
 }
 
 # Function to stop the service
 stop_service() {
-    echo "Stopping DNSProxy service..."
-    run_command systemctl stop dnsproxy
-    sleep 2
-    if ! systemctl is-active --quiet dnsproxy; then
-        echo "DNSProxy service stopped successfully."
-    else
-        echo "Failed to stop DNSProxy service." >&2
-    fi
+    systemctl stop dnsproxy.service
 }
 
 # Function to show the status
 show_status() {
-    echo "DNSProxy status:"
-    systemctl status dnsproxy
+    systemctl status dnsproxy.service
+}
+
+# Function to restart the service
+restart_service() {
+    systemctl restart dnsproxy.service
 }
 
 # Function to handle whitelist start
@@ -277,8 +266,7 @@ case "$1" in
         stop_service
         ;;
     restart)
-        stop_service
-        start_service
+        restart_service
         ;;
     status)
         show_status

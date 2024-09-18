@@ -6,11 +6,10 @@ import signal
 import socket
 
 class DNSServer:
-    def __init__(self, ip_address, allow_all=False, whitelist=None, allowed_ips=None, port=53):
+    def __init__(self, ip_address, allow_all=False, whitelist=None, port=53):
         self.ip_address = ip_address
         self.allow_all = allow_all
         self.whitelist = whitelist or []
-        self.allowed_ips = allowed_ips or []
         self.port = port
         self.resolver = None
         self.transport = None
@@ -35,10 +34,6 @@ class DNSServer:
             return None
 
     async def handle_dns_request(self, data, addr):
-        if self.allowed_ips and addr[0] not in self.allowed_ips:
-            print(f"Blocked request from unauthorized IP: {addr[0]}")
-            return None
-
         try:
             packet = DNSRecord.parse(data)
             for question in packet.questions:
@@ -136,7 +131,6 @@ if __name__ == "__main__":
         parser = argparse.ArgumentParser(description='SNI Proxy with DNS')
         parser.add_argument('--dns-allow-all', action='store_true', help='Allow all DNS requests')
         parser.add_argument('--whitelist', type=str, help='Path to whitelist file')
-        parser.add_argument('--allowed-ips', type=str, help='Path to allowed IPs file')
         parser.add_argument('--ip', required=True, help='Server IP address')
         parser.add_argument('--port', type=int, default=53, help='DNS server port')
         args = parser.parse_args()
@@ -146,12 +140,7 @@ if __name__ == "__main__":
             with open(args.whitelist, 'r') as f:
                 whitelist = [line.strip() for line in f if line.strip()]
 
-        allowed_ips = []
-        if args.allowed_ips:
-            with open(args.allowed_ips, 'r') as f:
-                allowed_ips = [line.strip() for line in f if line.strip()]
-
-        server_container.dns_server = DNSServer(args.ip, allow_all=args.dns_allow_all, whitelist=whitelist, allowed_ips=allowed_ips, port=args.port)
+        server_container.dns_server = DNSServer(args.ip, allow_all=args.dns_allow_all, whitelist=whitelist, port=args.port)
         await server_container.dns_server.run_server()
 
     for sig in [signal.SIGINT, signal.SIGTERM]:
@@ -169,5 +158,4 @@ if __name__ == "__main__":
         loop.close()
         print("Script exited.")
     
-    import sys
     sys.exit(0)

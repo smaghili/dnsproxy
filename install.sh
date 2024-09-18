@@ -7,6 +7,7 @@ SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
 DNSPROXY_SHELL_SCRIPT="/usr/local/bin/dnsproxy"
 SERVICE_NAME="dnsproxy"
 WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
+ALLOWED_IPS_FILE="$INSTALL_DIR/allowed_ips.txt"
 LOG_FILE="/var/log/dnsproxy.log"
 DNS_PORT=53
 
@@ -120,6 +121,7 @@ set_google_dns() {
 # Function to create systemd service
 create_systemd_service() {
     local service_file="/etc/systemd/system/$SERVICE_NAME.service"
+    echo "Creating systemd service for DNSProxy..."
     local service_content="
 [Unit]
 Description=DNSProxy Service
@@ -149,32 +151,27 @@ INSTALL_DIR="/etc/dnsproxy"
 SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
 SERVICE_NAME="dnsproxy"
 WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
+ALLOWED_IPS_FILE="$INSTALL_DIR/allowed_ips.txt"
 DNS_PORT=53
 
 get_server_ip() {
     hostname -I | awk '{print \$1}'
 }
 
-get_current_mode() {
-    if grep -q -- "--dns-allow-all" /etc/systemd/system/$SERVICE_NAME.service; then
-        echo "dns-allow-all"
-    elif grep -q -- "--whitelist" /etc/systemd/system/$SERVICE_NAME.service; then
-        echo "whitelist"
-    else
-        echo "unknown"
-    fi
-}
-
 switch_to_whitelist_mode() {
-    local current_mode=\$(get_current_mode)
-    if [ "\$current_mode" = "whitelist" ]; then
-        echo "DNSProxy is already running in whitelist mode."
-        return
+    local use_allowed_ips=false
+    if [ "\$1" = "--allowip" ]; then
+        use_allowed_ips=true
     fi
 
     echo "Switching to whitelist mode..."
     systemctl stop $SERVICE_NAME.service
     rm -f /etc/systemd/system/$SERVICE_NAME.service
+    
+    local allowed_ips_arg=""
+    if [ "\$use_allowed_ips" = true ]; then
+        allowed_ips_arg="--allowed-ips \$(cat $ALLOWED_IPS_FILE)"
+    fi
     
     cat > /etc/systemd/system/$SERVICE_NAME.service << EOL
 [Unit]
@@ -183,7 +180,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 $SCRIPT_PATH --ip \$(get_server_ip) --port $DNS_PORT --whitelist $WHITELIST_FILE
+ExecStart=/usr/bin/python3 $SCRIPT_PATH --ip \$(get_server_ip) --port $DNS_PORT --whitelist $WHITELIST_FILE \$allowed_ips_arg
 Restart=on-failure
 User=root
 
@@ -195,15 +192,14 @@ EOL
     systemctl enable $SERVICE_NAME
     systemctl start $SERVICE_NAME.service
     echo "DNSProxy is now running in whitelist mode."
+    if [ "\$use_allowed_ips" = true ]; then
+        echo "Only IPs in the allowed list can access the DNS proxy."
+    else
+        echo "All IPs can access the DNS proxy."
+    fi
 }
 
 switch_to_dns_allow_all_mode() {
-    local current_mode=\$(get_current_mode)
-    if [ "\$current_mode" = "dns-allow-all" ]; then
-        echo "DNSProxy is already running in dns-allow-all mode."
-        return
-    fi
-
     echo "Switching to dns-allow-all mode..."
     systemctl stop $SERVICE_NAME.service
     rm -f /etc/systemd/system/$SERVICE_NAME.service
@@ -250,7 +246,11 @@ uninstall_dnsproxy() {
 case "\$1" in
     start)
         if [ "\$2" = "--whitelist" ]; then
-            switch_to_whitelist_mode
+            if [ "\$3" = "--allowip" ]; then
+                switch_to_whitelist_mode --allowip
+            else
+                switch_to_whitelist_mode
+            fi
         elif [ "\$2" = "--dns-allow-all" ]; then
             switch_to_dns_allow_all_mode
         else
@@ -270,7 +270,7 @@ case "\$1" in
         uninstall_dnsproxy
         ;;
     *)
-        echo "Usage: \$0 {start|stop|restart|status|start --whitelist|start --dns-allow-all|uninstall}"
+        echo "Usage: \$0 {start|stop|restart|status|start --whitelist [--allowip]|start --dns-allow-all|uninstall}"
         exit 1
         ;;
 esac
@@ -288,11 +288,15 @@ install_dnsproxy() {
     create_nginx_config
     set_google_dns
     check_and_stop_services_using_port $DNS_PORT
+    
+    # Create initial allowed IPs file with the server's own IP
+    echo "$(get_server_ip)" > "$ALLOWED_IPS_FILE"
+    
     create_systemd_service
     update_dnsproxy_shell_script
     systemctl start $SERVICE_NAME.service >/dev/null 2>&1
     echo "DNSProxy installation and setup completed."
-    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|uninstall}' to manage the service."
+    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist [--allowip]|start --dns-allow-all|uninstall}' to manage the service."
 }
 
 # Main script logic
@@ -301,7 +305,7 @@ if [ $# -eq 0 ]; then
 else
     echo "Usage: $0"
     echo "This script will automatically install and set up DNSProxy."
-    echo "After installation, use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|uninstall}' to manage the service."
+    echo "After installation, use 'dnsproxy {start|stop|restart|status|start --whitelist [--allowip]|start --dns-allow-all|uninstall}' to manage the service."
     exit 1
 fi
 

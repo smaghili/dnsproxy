@@ -166,6 +166,7 @@ WantedBy=multi-user.target
 
 # Update the dnsproxy shell script
 update_dnsproxy_shell_script() {
+    echo "Updating DNSProxy shell script..."
     cat > "$DNSPROXY_SHELL_SCRIPT" << EOF
 #!/bin/bash
 
@@ -182,7 +183,7 @@ get_server_ip() {
 switch_to_whitelist_mode() {
     echo "Switching to whitelist mode..."
     systemctl stop $SERVICE_NAME.service
-    rm /etc/systemd/system/$SERVICE_NAME.service
+    rm -f /etc/systemd/system/$SERVICE_NAME.service
     
     # Create new systemd service file with whitelist
     cat > /etc/systemd/system/$SERVICE_NAME.service << EOL
@@ -231,7 +232,8 @@ esac
 
 exit 0
 EOF
-    run_command chmod +x "$DNSPROXY_SHELL_SCRIPT"
+    chmod +x "$DNSPROXY_SHELL_SCRIPT"
+    echo "DNSProxy shell script updated successfully."
 }
 
 # Main installation function

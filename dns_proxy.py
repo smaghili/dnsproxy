@@ -4,12 +4,11 @@ from dnslib import DNSRecord, RR, A, QTYPE
 import argparse
 import signal
 import socket
-import ipaddress
 
 class DNSServer:
-    def __init__(self, ip_address, dns_allow_all=False, whitelist=None, allowed_ips=None, port=53):
+    def __init__(self, ip_address, allow_all=False, whitelist=None, allowed_ips=None, port=53):
         self.ip_address = ip_address
-        self.dns_allow_all = dns_allow_all
+        self.allow_all = allow_all
         self.whitelist = whitelist or []
         self.allowed_ips = allowed_ips or []
         self.port = port
@@ -35,18 +34,8 @@ class DNSServer:
             print(f"Error resolving domain with system DNS {domain}: {e}")
             return None
 
-    def is_ip_allowed(self, ip):
-        if not self.allowed_ips:
-            return True
-        return ip in self.allowed_ips
-
-    def is_domain_allowed(self, domain):
-        if self.dns_allow_all:
-            return True
-        return any(domain.endswith(whitelisted_domain) for whitelisted_domain in self.whitelist)
-
     async def handle_dns_request(self, data, addr):
-        if not self.is_ip_allowed(addr[0]):
+        if self.allowed_ips and addr[0] not in self.allowed_ips:
             print(f"Blocked request from unauthorized IP: {addr[0]}")
             return None
 
@@ -56,23 +45,21 @@ class DNSServer:
                 requested_domain_name = str(question.qname).rstrip('.')
                 reply_packet = packet.reply()
 
-                if self.is_domain_allowed(requested_domain_name):
-                    if self.dns_allow_all:
-                        resolved_ip = await self.resolve_domain(requested_domain_name)
-                        if not resolved_ip:
-                            resolved_ip = await self.resolve_domain_with_system_dns(requested_domain_name)
-                        
-                        if resolved_ip:
-                            reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(resolved_ip), ttl=60))
-                        else:
-                            print(f"Failed to resolve domain: {requested_domain_name}")
-                            return None
-                    else:
-                        # Return the local IP if in whitelist mode
-                        reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(self.ip_address), ttl=60))
+                if self.allow_all or any(domain in requested_domain_name for domain in self.whitelist):
+                    # Return the local IP if allowed or whitelisted
+                    reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(self.ip_address), ttl=60))
                 else:
-                    print(f"Blocked request for non-whitelisted domain: {requested_domain_name}")
-                    return None
+                    # First try to resolve with aiodns
+                    resolved_ip = await self.resolve_domain(requested_domain_name)
+                    if not resolved_ip:
+                        # If aiodns fails, fallback to system DNS
+                        resolved_ip = await self.resolve_domain_with_system_dns(requested_domain_name)
+                    
+                    if resolved_ip:
+                        reply_packet.add_answer(RR(question.qname, QTYPE.A, rdata=A(resolved_ip), ttl=60))
+                    else:
+                        print(f"Failed to resolve domain: {requested_domain_name}")
+                        return None
 
                 return reply_packet.pack()
         except Exception as e:
@@ -155,7 +142,7 @@ if __name__ == "__main__":
         args = parser.parse_args()
 
         whitelist = []
-        if args.whitelist:
+        if not args.dns_allow_all and args.whitelist:
             with open(args.whitelist, 'r') as f:
                 whitelist = [line.strip() for line in f if line.strip()]
 
@@ -164,7 +151,7 @@ if __name__ == "__main__":
             with open(args.allowed_ips, 'r') as f:
                 allowed_ips = [line.strip() for line in f if line.strip()]
 
-        server_container.dns_server = DNSServer(args.ip, dns_allow_all=args.dns_allow_all, whitelist=whitelist, allowed_ips=allowed_ips, port=args.port)
+        server_container.dns_server = DNSServer(args.ip, allow_all=args.dns_allow_all, whitelist=whitelist, allowed_ips=allowed_ips, port=args.port)
         await server_container.dns_server.run_server()
 
     for sig in [signal.SIGINT, signal.SIGTERM]:

@@ -256,6 +256,31 @@ EOL
     echo "DNSProxy is now running in dns-allow-all mode."
 }
 
+uninstall_dnsproxy() {
+    echo "Uninstalling DNSProxy..."
+    
+    # Stop and disable the service
+    systemctl stop $SERVICE_NAME.service
+    systemctl disable $SERVICE_NAME.service
+    
+    # Remove systemd service file
+    rm -f /etc/systemd/system/$SERVICE_NAME.service
+    systemctl daemon-reload
+    
+    # Remove installation directory
+    rm -rf $INSTALL_DIR
+    
+    # Remove script files
+    rm -f $SCRIPT_PATH
+    rm -f $DNSPROXY_SHELL_SCRIPT
+    
+    # Remove log file
+    rm -f $LOG_FILE
+    
+    echo "DNSProxy has been completely uninstalled."
+    exit 0
+}
+
 case "\$1" in
     start)
         if [ "\$2" = "--whitelist" ]; then
@@ -275,8 +300,11 @@ case "\$1" in
     status)
         systemctl status $SERVICE_NAME.service
         ;;
+    uninstall)
+        uninstall_dnsproxy
+        ;;
     *)
-        echo "Usage: \$0 {start|stop|restart|status|start --whitelist|start --dns-allow-all}"
+        echo "Usage: \$0 {start|stop|restart|status|start --whitelist|start --dns-allow-all|uninstall}"
         exit 1
         ;;
 esac
@@ -298,7 +326,7 @@ install_dnsproxy() {
     update_dnsproxy_shell_script
     systemctl start $SERVICE_NAME.service
     echo "Installation and setup completed."
-    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all}' to manage the service."
+    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|uninstall}' to manage the service."
 }
 
 # Main script logic
@@ -307,7 +335,7 @@ if [ $# -eq 0 ]; then
 else
     echo "Usage: $0"
     echo "This script will automatically install and set up DNSProxy."
-    echo "After installation, use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all}' to manage the service."
+    echo "After installation, use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|uninstall}' to manage the service."
     exit 1
 fi
 

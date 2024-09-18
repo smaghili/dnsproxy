@@ -164,56 +164,47 @@ WantedBy=multi-user.target
     run_command systemctl enable $SERVICE_NAME
 }
 
-# Function to create systemd service with whitelist
-create_systemd_service_with_whitelist() {
-    local service_file="/etc/systemd/system/$SERVICE_NAME.service"
-    echo "Creating systemd service for DNSProxy with whitelist..."
-    local service_content="
+# Update the dnsproxy shell script
+update_dnsproxy_shell_script() {
+    cat > "$DNSPROXY_SHELL_SCRIPT" << EOF
+#!/bin/bash
+
+INSTALL_DIR="/etc/dnsproxy"
+SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
+SERVICE_NAME="dnsproxy"
+WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
+DNS_PORT=53
+
+get_server_ip() {
+    hostname -I | awk '{print \$1}'
+}
+
+switch_to_whitelist_mode() {
+    echo "Switching to whitelist mode..."
+    systemctl stop $SERVICE_NAME.service
+    rm /etc/systemd/system/$SERVICE_NAME.service
+    
+    # Create new systemd service file with whitelist
+    cat > /etc/systemd/system/$SERVICE_NAME.service << EOL
 [Unit]
 Description=DNSProxy Service with Whitelist
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 $SCRIPT_PATH --ip $(get_server_ip) --port $DNS_PORT --whitelist $WHITELIST_FILE
+ExecStart=/usr/bin/python3 $SCRIPT_PATH --ip \$(get_server_ip) --port $DNS_PORT --whitelist $WHITELIST_FILE
 Restart=on-failure
 User=root
 
 [Install]
 WantedBy=multi-user.target
-"
-    echo "$service_content" > "$service_file"
-    run_command systemctl daemon-reload
-    run_command systemctl enable $SERVICE_NAME
-}
+EOL
 
-# Function to switch to whitelist mode
-switch_to_whitelist_mode() {
-    echo "Switching to whitelist mode..."
-    systemctl stop $SERVICE_NAME.service
-    rm /etc/systemd/system/$SERVICE_NAME.service
-    create_systemd_service_with_whitelist
+    systemctl daemon-reload
+    systemctl enable $SERVICE_NAME
     systemctl start $SERVICE_NAME.service
     echo "DNSProxy is now running in whitelist mode."
 }
-
-# Main installation function
-install_dnsproxy() {
-    install_packages
-    setup_dns_proxy
-    create_nginx_config
-    set_google_dns
-    check_and_stop_services_using_port $DNS_PORT
-    create_systemd_service
-    systemctl start $SERVICE_NAME.service
-    echo "Installation and setup completed."
-    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist}' to manage the service."
-}
-
-# Update the dnsproxy shell script
-update_dnsproxy_shell_script() {
-    cat > "$DNSPROXY_SHELL_SCRIPT" << EOF
-#!/bin/bash
 
 case "\$1" in
     start)
@@ -243,10 +234,23 @@ EOF
     run_command chmod +x "$DNSPROXY_SHELL_SCRIPT"
 }
 
+# Main installation function
+install_dnsproxy() {
+    install_packages
+    setup_dns_proxy
+    create_nginx_config
+    set_google_dns
+    check_and_stop_services_using_port $DNS_PORT
+    create_systemd_service
+    update_dnsproxy_shell_script
+    systemctl start $SERVICE_NAME.service
+    echo "Installation and setup completed."
+    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist}' to manage the service."
+}
+
 # Main script logic
 if [ $# -eq 0 ]; then
     install_dnsproxy
-    update_dnsproxy_shell_script
 else
     echo "Usage: $0"
     echo "This script will automatically install and set up DNSProxy."

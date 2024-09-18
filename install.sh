@@ -11,7 +11,112 @@ ALLOWED_IPS_FILE="$INSTALL_DIR/allowed_ips.txt"
 LOG_FILE="/var/log/dnsproxy.log"
 DNS_PORT=53
 
-# ... (previous functions remain unchanged)
+# Function to run commands
+run_command() {
+    "$@"
+}
+
+# Function to check if a package is installed
+check_installed() {
+    dpkg -l "$1" &> /dev/null
+}
+
+# Function to install required packages
+install_packages() {
+    local packages=("nginx" "python3" "python3-pip" "git")
+    local to_install=()
+
+    for package in "${packages[@]}"; do
+        if ! check_installed "$package"; then
+            to_install+=("$package")
+        fi
+    done
+
+    if [ ${#to_install[@]} -ne 0 ]; then
+        echo "Installing packages: ${to_install[@]}..."
+        run_command apt-get update >/dev/null 2>&1
+        run_command apt-get install -y "${to_install[@]}" >/dev/null 2>&1
+    fi
+
+    # Install Python packages
+    pip3 install dnslib aiodns >/dev/null 2>&1
+    echo "All required packages are installed."
+}
+
+# Function to clone or update the repository and set up the script
+setup_dns_proxy() {
+    if [ ! -d "$INSTALL_DIR" ]; then
+        git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1
+    else
+        (cd "$INSTALL_DIR" && git pull >/dev/null 2>&1)
+    fi
+
+    cp "$INSTALL_DIR/dns_proxy.py" "$SCRIPT_PATH"
+    chmod +x "$SCRIPT_PATH"
+    echo "DNSProxy repository setup completed."
+}
+
+# Function to create Nginx configuration
+create_nginx_config() {
+    local nginx_conf="
+worker_processes auto;
+worker_rlimit_nofile 65535;
+load_module /usr/lib/nginx/modules/ngx_stream_module.so;
+
+events {
+    worker_connections 65535;
+    multi_accept on;
+    use epoll;
+}
+
+http {
+    server {
+        listen 80 default_server;
+        listen [::]:80 default_server;
+        server_name _;
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+stream {
+    server {
+        resolver 1.1.1.1 ipv6=off;
+        listen 443;
+        ssl_preread on;
+        proxy_pass \$ssl_preread_server_name:443;
+        proxy_buffer_size 16k;
+        proxy_socket_keepalive on;
+    }
+}
+"
+    echo "$nginx_conf" > /etc/nginx/nginx.conf
+    systemctl restart nginx >/dev/null 2>&1
+    echo "Nginx configuration updated."
+}
+
+# Function to get server IP
+get_server_ip() {
+    hostname -I | awk '{print $1}'
+}
+
+# Function to check and stop services using port
+check_and_stop_services_using_port() {
+    local port=$1
+    if ss -tuln | grep ":$port" &> /dev/null; then
+        lsof -ti:$port | xargs -r kill -9 >/dev/null 2>&1
+        systemctl stop systemd-resolved >/dev/null 2>&1
+    fi
+}
+
+# Function to set Google DNS
+set_google_dns() {
+    local google_dns="nameserver 8.8.8.8\nnameserver 8.8.4.4"
+    local current_dns=$(grep nameserver /etc/resolv.conf || true)
+    if [[ -z "$current_dns" || "$current_dns" != *"8.8.8.8"* ]]; then
+        echo -e "$google_dns" > /etc/resolv.conf
+        echo "Google DNS has been set."
+    fi
+}
 
 # Function to create systemd service
 create_systemd_service() {

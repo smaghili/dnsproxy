@@ -22,7 +22,6 @@ check_installed() {
 
 # Function to install required packages
 install_packages() {
-    echo "Checking if Nginx, Python3, pip3, and git are installed..."
     local packages=("nginx" "python3" "python3-pip" "git")
     local to_install=()
 
@@ -34,28 +33,26 @@ install_packages() {
 
     if [ ${#to_install[@]} -ne 0 ]; then
         echo "Installing packages: ${to_install[@]}..."
-        run_command apt-get update
-        run_command apt-get install -y "${to_install[@]}"
-    else
-        echo "All required packages are already installed."
+        run_command apt-get update >/dev/null 2>&1
+        run_command apt-get install -y "${to_install[@]}" >/dev/null 2>&1
     fi
 
-    echo "Installing Python packages dnslib and aiodns..."
-    run_command pip3 install dnslib aiodns
+    # Install Python packages
+    pip3 install dnslib aiodns >/dev/null 2>&1
+    echo "All required packages are installed."
 }
 
 # Function to clone or update the repository and set up the script
 setup_dns_proxy() {
-    echo "Cloning or updating DNSProxy repository..."
     if [ ! -d "$INSTALL_DIR" ]; then
-        run_command git clone "$REPO_URL" "$INSTALL_DIR"
+        git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1
     else
-        run_command bash -c "cd $INSTALL_DIR && git pull"
+        (cd "$INSTALL_DIR" && git pull >/dev/null 2>&1)
     fi
 
-    echo "Copying dns_proxy.py to $SCRIPT_PATH..."
-    run_command cp "$INSTALL_DIR/dns_proxy.py" "$SCRIPT_PATH"
-    run_command chmod +x "$SCRIPT_PATH"
+    cp "$INSTALL_DIR/dns_proxy.py" "$SCRIPT_PATH"
+    chmod +x "$SCRIPT_PATH"
+    echo "DNSProxy repository setup completed."
 }
 
 # Function to create Nginx configuration
@@ -91,60 +88,38 @@ stream {
     }
 }
 "
-    echo "Creating Nginx configuration..."
     echo "$nginx_conf" > /etc/nginx/nginx.conf
-    run_command systemctl restart nginx
+    systemctl restart nginx >/dev/null 2>&1
+    echo "Nginx configuration updated."
 }
 
 # Function to get server IP
 get_server_ip() {
-    local ip_address
-    ip_address=$(hostname -I | awk '{print $1}')
-    if [ -z "$ip_address" ]; then
-        echo "Could not determine the server's IP address." >&2
-        exit 1
-    fi
-    echo "$ip_address"
+    hostname -I | awk '{print $1}'
 }
 
 # Function to check and stop services using port
 check_and_stop_services_using_port() {
     local port=$1
-    echo "Checking for services using port $port..."
     if ss -tuln | grep ":$port" &> /dev/null; then
-        echo "Port $port is in use. Attempting to stop related services..."
-        local process_ids
-        process_ids=$(lsof -ti:$port)
-        if [ -n "$process_ids" ]; then
-            for pid in $process_ids; do
-                echo "Stopping process with PID $pid"
-                run_command kill -9 "$pid"
-            done
-        fi
-        run_command systemctl stop systemd-resolved
-    else
-        echo "Port $port is not in use."
+        lsof -ti:$port | xargs -r kill -9 >/dev/null 2>&1
+        systemctl stop systemd-resolved >/dev/null 2>&1
     fi
 }
 
 # Function to set Google DNS
 set_google_dns() {
-    echo "Setting Google DNS..."
     local google_dns="nameserver 8.8.8.8\nnameserver 8.8.4.4"
-    local current_dns
-    current_dns=$(grep nameserver /etc/resolv.conf || true)
+    local current_dns=$(grep nameserver /etc/resolv.conf || true)
     if [[ -z "$current_dns" || "$current_dns" != *"8.8.8.8"* ]]; then
         echo -e "$google_dns" > /etc/resolv.conf
         echo "Google DNS has been set."
-    else
-        echo "Google DNS is already set."
     fi
 }
 
 # Function to create systemd service
 create_systemd_service() {
     local service_file="/etc/systemd/system/$SERVICE_NAME.service"
-    echo "Creating systemd service for DNSProxy..."
     local service_content="
 [Unit]
 Description=DNSProxy Service
@@ -160,13 +135,13 @@ User=root
 WantedBy=multi-user.target
 "
     echo "$service_content" > "$service_file"
-    run_command systemctl daemon-reload
-    run_command systemctl enable $SERVICE_NAME
+    systemctl daemon-reload >/dev/null 2>&1
+    systemctl enable $SERVICE_NAME >/dev/null 2>&1
+    echo "Systemd service created."
 }
 
 # Update the dnsproxy shell script
 update_dnsproxy_shell_script() {
-    echo "Updating DNSProxy shell script..."
     cat > "$DNSPROXY_SHELL_SCRIPT" << EOF
 #!/bin/bash
 
@@ -201,7 +176,6 @@ switch_to_whitelist_mode() {
     systemctl stop $SERVICE_NAME.service
     rm -f /etc/systemd/system/$SERVICE_NAME.service
     
-    # Create new systemd service file with whitelist
     cat > /etc/systemd/system/$SERVICE_NAME.service << EOL
 [Unit]
 Description=DNSProxy Service with Whitelist
@@ -234,7 +208,6 @@ switch_to_dns_allow_all_mode() {
     systemctl stop $SERVICE_NAME.service
     rm -f /etc/systemd/system/$SERVICE_NAME.service
     
-    # Create new systemd service file with dns-allow-all
     cat > /etc/systemd/system/$SERVICE_NAME.service << EOL
 [Unit]
 Description=DNSProxy Service with DNS Allow All
@@ -259,22 +232,15 @@ EOL
 uninstall_dnsproxy() {
     echo "Uninstalling DNSProxy..."
     
-    # Stop and disable the service
     systemctl stop $SERVICE_NAME.service
     systemctl disable $SERVICE_NAME.service
     
-    # Remove systemd service file
     rm -f /etc/systemd/system/$SERVICE_NAME.service
     systemctl daemon-reload
     
-    # Remove installation directory
     rm -rf $INSTALL_DIR
-    
-    # Remove script files
     rm -f $SCRIPT_PATH
     rm -f $DNSPROXY_SHELL_SCRIPT
-    
-    # Remove log file
     rm -f $LOG_FILE
     
     echo "DNSProxy has been completely uninstalled."
@@ -312,7 +278,7 @@ esac
 exit 0
 EOF
     chmod +x "$DNSPROXY_SHELL_SCRIPT"
-    echo "DNSProxy shell script updated successfully."
+    echo "DNSProxy shell script updated."
 }
 
 # Main installation function
@@ -324,8 +290,8 @@ install_dnsproxy() {
     check_and_stop_services_using_port $DNS_PORT
     create_systemd_service
     update_dnsproxy_shell_script
-    systemctl start $SERVICE_NAME.service
-    echo "Installation and setup completed."
+    systemctl start $SERVICE_NAME.service >/dev/null 2>&1
+    echo "DNSProxy installation and setup completed."
     echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|uninstall}' to manage the service."
 }
 

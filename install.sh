@@ -180,7 +180,23 @@ get_server_ip() {
     hostname -I | awk '{print \$1}'
 }
 
+get_current_mode() {
+    if grep -q -- "--dns-allow-all" /etc/systemd/system/$SERVICE_NAME.service; then
+        echo "dns-allow-all"
+    elif grep -q -- "--whitelist" /etc/systemd/system/$SERVICE_NAME.service; then
+        echo "whitelist"
+    else
+        echo "unknown"
+    fi
+}
+
 switch_to_whitelist_mode() {
+    local current_mode=\$(get_current_mode)
+    if [ "\$current_mode" = "whitelist" ]; then
+        echo "DNSProxy is already running in whitelist mode."
+        return
+    fi
+
     echo "Switching to whitelist mode..."
     systemctl stop $SERVICE_NAME.service
     rm -f /etc/systemd/system/$SERVICE_NAME.service
@@ -207,10 +223,45 @@ EOL
     echo "DNSProxy is now running in whitelist mode."
 }
 
+switch_to_dns_allow_all_mode() {
+    local current_mode=\$(get_current_mode)
+    if [ "\$current_mode" = "dns-allow-all" ]; then
+        echo "DNSProxy is already running in dns-allow-all mode."
+        return
+    fi
+
+    echo "Switching to dns-allow-all mode..."
+    systemctl stop $SERVICE_NAME.service
+    rm -f /etc/systemd/system/$SERVICE_NAME.service
+    
+    # Create new systemd service file with dns-allow-all
+    cat > /etc/systemd/system/$SERVICE_NAME.service << EOL
+[Unit]
+Description=DNSProxy Service with DNS Allow All
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $SCRIPT_PATH --ip \$(get_server_ip) --port $DNS_PORT --dns-allow-all
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    systemctl daemon-reload
+    systemctl enable $SERVICE_NAME
+    systemctl start $SERVICE_NAME.service
+    echo "DNSProxy is now running in dns-allow-all mode."
+}
+
 case "\$1" in
     start)
         if [ "\$2" = "--whitelist" ]; then
             switch_to_whitelist_mode
+        elif [ "\$2" = "--dns-allow-all" ]; then
+            switch_to_dns_allow_all_mode
         else
             systemctl start $SERVICE_NAME.service
         fi
@@ -225,7 +276,7 @@ case "\$1" in
         systemctl status $SERVICE_NAME.service
         ;;
     *)
-        echo "Usage: \$0 {start|stop|restart|status|start --whitelist}"
+        echo "Usage: \$0 {start|stop|restart|status|start --whitelist|start --dns-allow-all}"
         exit 1
         ;;
 esac
@@ -247,7 +298,7 @@ install_dnsproxy() {
     update_dnsproxy_shell_script
     systemctl start $SERVICE_NAME.service
     echo "Installation and setup completed."
-    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist}' to manage the service."
+    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all}' to manage the service."
 }
 
 # Main script logic
@@ -256,7 +307,7 @@ if [ $# -eq 0 ]; then
 else
     echo "Usage: $0"
     echo "This script will automatically install and set up DNSProxy."
-    echo "After installation, use 'dnsproxy {start|stop|restart|status|start --whitelist}' to manage the service."
+    echo "After installation, use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all}' to manage the service."
     exit 1
 fi
 

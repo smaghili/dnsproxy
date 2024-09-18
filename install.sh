@@ -5,6 +5,7 @@ REPO_URL="https://github.com/smaghili/dnsproxy.git"
 INSTALL_DIR="/etc/dnsproxy"
 SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
 DNSPROXY_SHELL_SCRIPT="/usr/local/bin/dnsproxy"
+IPLIMIT_SCRIPT="$INSTALL_DIR/iplimit.sh"
 SERVICE_NAME="dnsproxy"
 WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
 LOG_FILE="/var/log/dnsproxy.log"
@@ -149,6 +150,7 @@ INSTALL_DIR="/etc/dnsproxy"
 SCRIPT_PATH="/usr/local/bin/dns_proxy.py"
 SERVICE_NAME="dnsproxy"
 WHITELIST_FILE="$INSTALL_DIR/whitelist.txt"
+IPLIMIT_SCRIPT="$IPLIMIT_SCRIPT"
 DNS_PORT=53
 
 get_server_ip() {
@@ -229,6 +231,30 @@ EOL
     echo "DNSProxy is now running in dns-allow-all mode."
 }
 
+enable_ip_limit() {
+    if [ -f "$IPLIMIT_SCRIPT" ]; then
+        echo "Enabling IP limiting..."
+        $IPLIMIT_SCRIPT
+        echo "IP limiting enabled."
+    else
+        echo "Error: IP Limit script not found. Cannot enable IP limiting."
+    fi
+}
+
+disable_ip_limit() {
+    echo "Disabling IP limiting and clearing all iptables rules..."
+    iptables -F
+    iptables -X
+    iptables -t nat -F
+    iptables -t nat -X
+    iptables -t mangle -F
+    iptables -t mangle -X
+    iptables -P INPUT ACCEPT
+    iptables -P FORWARD ACCEPT
+    iptables -P OUTPUT ACCEPT
+    echo "All iptables rules have been cleared and IP limiting is disabled."
+}
+
 uninstall_dnsproxy() {
     echo "Uninstalling DNSProxy..."
     
@@ -266,11 +292,25 @@ case "\$1" in
     status)
         systemctl status $SERVICE_NAME.service
         ;;
+    enable)
+        if [ "\$2" = "ip" ]; then
+            enable_ip_limit
+        else
+            echo "Usage: \$0 enable ip"
+        fi
+        ;;
+    disable)
+        if [ "\$2" = "ip" ]; then
+            disable_ip_limit
+        else
+            echo "Usage: \$0 disable ip"
+        fi
+        ;;
     uninstall)
         uninstall_dnsproxy
         ;;
     *)
-        echo "Usage: \$0 {start|stop|restart|status|start --whitelist|start --dns-allow-all|uninstall}"
+        echo "Usage: \$0 {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|uninstall}"
         exit 1
         ;;
 esac
@@ -292,7 +332,7 @@ install_dnsproxy() {
     update_dnsproxy_shell_script
     systemctl start $SERVICE_NAME.service >/dev/null 2>&1
     echo "DNSProxy installation and setup completed."
-    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|uninstall}' to manage the service."
+    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|uninstall}' to manage the service."
 }
 
 # Main script logic
@@ -301,7 +341,7 @@ if [ $# -eq 0 ]; then
 else
     echo "Usage: $0"
     echo "This script will automatically install and set up DNSProxy."
-    echo "After installation, use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|uninstall}' to manage the service."
+    echo "After installation, use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|uninstall}' to manage the service."
     exit 1
 fi
 

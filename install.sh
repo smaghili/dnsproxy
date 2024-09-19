@@ -234,6 +234,7 @@ EOL
 enable_ip_limit() {
     if [ -f "$IPLIMIT_SCRIPT" ]; then
         echo "Enabling IP limiting..."
+        chmod +x "$IPLIMIT_SCRIPT"
         $IPLIMIT_SCRIPT
         echo "IP limiting enabled."
     else
@@ -256,7 +257,7 @@ disable_ip_limit() {
 }
 
 check_ip_limit_status() {
-    if iptables -L INPUT -v -n | awk '/multiport dports 53,80,443/ && /DROP/ {found=1; exit} END {print (found ? "ACTIVE" : "INACTIVE")}' | grep -q "ACTIVE"; then
+    if iptables -L INPUT -v -n | grep -q "multiport dports 53,80,443"; then
         echo "IP Limit is currently ACTIVE"
         echo "The following ports are restricted for non-allowed IPs: 53, 80, 443"
     else
@@ -267,18 +268,36 @@ check_ip_limit_status() {
 uninstall_dnsproxy() {
     echo "Uninstalling DNSProxy..."
     
+    # First, disable IP Limit
+    echo "Disabling IP Limit..."
+    disable_ip_limit
+    
+    # Stop and disable the service
     systemctl stop $SERVICE_NAME.service
     systemctl disable $SERVICE_NAME.service
     
+    # Remove the service file
     rm -f /etc/systemd/system/$SERVICE_NAME.service
     systemctl daemon-reload
     
+    # Remove all related files and directories
     rm -rf $INSTALL_DIR
     rm -f $SCRIPT_PATH
     rm -f $DNSPROXY_SHELL_SCRIPT
     rm -f $LOG_FILE
     
-    echo "DNSProxy has been completely uninstalled."
+    # Remove the whitelist file if it exists
+    rm -f $WHITELIST_FILE
+    
+    # Remove the IP Limit script if it exists
+    rm -f $IPLIMIT_SCRIPT
+    
+    # Remove any potential leftover configuration files
+    rm -f /etc/dnsproxy/*.conf
+    
+    echo "DNSProxy has been completely uninstalled and all related files have been removed."
+    echo "Please note that any changes made to Nginx configuration have not been reverted."
+    echo "You may need to manually adjust your Nginx configuration if necessary."
     exit 0
 }
 
@@ -343,6 +362,7 @@ install_dnsproxy() {
     check_and_stop_services_using_port $DNS_PORT
     create_systemd_service
     update_dnsproxy_shell_script
+    chmod +x "$IPLIMIT_SCRIPT"
     systemctl start $SERVICE_NAME.service >/dev/null 2>&1
     echo "DNSProxy installation and setup completed."
     echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|uninstall|status ip}' to manage the service."

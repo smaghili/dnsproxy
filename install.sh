@@ -255,6 +255,15 @@ disable_ip_limit() {
     echo "All iptables rules have been cleared and IP limiting is disabled."
 }
 
+check_ip_limit_status() {
+    if iptables -L INPUT -v -n | awk '/multiport dports 53,80,443/ && /DROP/ {found=1; exit} END {print (found ? "ACTIVE" : "INACTIVE")}' | grep -q "ACTIVE"; then
+        echo "IP Limit is currently ACTIVE"
+        echo "The following ports are restricted for non-allowed IPs: 53, 80, 443"
+    else
+        echo "IP Limit is currently INACTIVE"
+    fi
+}
+
 uninstall_dnsproxy() {
     echo "Uninstalling DNSProxy..."
     
@@ -290,7 +299,11 @@ case "\$1" in
         systemctl restart $SERVICE_NAME.service
         ;;
     status)
-        systemctl status $SERVICE_NAME.service
+        if [ "\$2" = "ip" ]; then
+            check_ip_limit_status
+        else
+            systemctl status $SERVICE_NAME.service
+        fi
         ;;
     enable)
         if [ "\$2" = "ip" ]; then
@@ -310,7 +323,7 @@ case "\$1" in
         uninstall_dnsproxy
         ;;
     *)
-        echo "Usage: \$0 {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|uninstall}"
+        echo "Usage: \$0 {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|uninstall|status ip}"
         exit 1
         ;;
 esac
@@ -332,7 +345,7 @@ install_dnsproxy() {
     update_dnsproxy_shell_script
     systemctl start $SERVICE_NAME.service >/dev/null 2>&1
     echo "DNSProxy installation and setup completed."
-    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|uninstall}' to manage the service."
+    echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|uninstall|status ip}' to manage the service."
 }
 
 # Main script logic
@@ -341,7 +354,7 @@ if [ $# -eq 0 ]; then
 else
     echo "Usage: $0"
     echo "This script will automatically install and set up DNSProxy."
-    echo "After installation, use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|uninstall}' to manage the service."
+    echo "After installation, use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|uninstall|status ip}' to manage the service."
     exit 1
 fi
 

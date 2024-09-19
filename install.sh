@@ -39,8 +39,8 @@ install_packages() {
         run_command sudo apt-get install -y "${to_install[@]}"
     fi
 
-    # Install Python packages
-    run_command sudo pip3 install dnslib aiodns
+    # Install Python packages including Flask
+    run_command sudo pip3 install dnslib aiodns flask
     echo "All required packages are installed."
 }
 
@@ -125,25 +125,25 @@ switch_to_mode() {
     echo "Switching to $mode mode..."
     sudo systemctl stop $SERVICE_NAME.service
     sudo rm -f /etc/systemd/system/$SERVICE_NAME.service
-    
+
     # Check the IP restriction flag
     local use_allowed_ips="false"
     if [ -f "$IP_RESTRICTION_FLAG" ]; then
         use_allowed_ips="true"
     fi
-    
+
     local allowed_ips_arg=""
     if [ "$use_allowed_ips" = "true" ]; then
         allowed_ips_arg="--allowed-ips $ALLOWED_IPS_FILE"
     fi
-    
+
     local whitelist_arg=""
     if [ "$mode" = "whitelist" ]; then
         whitelist_arg="--whitelist $WHITELIST_FILE"
     else
         whitelist_arg="--dns-allow-all"
     fi
-    
+
     cat << EOL | sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null
 [Unit]
 Description=DNSProxy Service with $mode
@@ -207,19 +207,19 @@ ip_restriction_status() {
 # Function to uninstall DNSProxy
 uninstall_dnsproxy() {
     echo "Uninstalling DNSProxy..."
-    
+
     sudo systemctl stop $SERVICE_NAME.service
     sudo systemctl disable $SERVICE_NAME.service
-    
+
     sudo rm -f /etc/systemd/system/$SERVICE_NAME.service
     sudo systemctl daemon-reload
-    
+
     sudo rm -rf $INSTALL_DIR
     sudo rm -f $SCRIPT_PATH
     sudo rm -f $DNSPROXY_SHELL_SCRIPT
     sudo rm -f $LOG_FILE
     sudo rm -f $IP_RESTRICTION_FLAG
-    
+
     echo "DNSProxy has been completely uninstalled."
     exit 0
 }
@@ -248,6 +248,31 @@ WantedBy=multi-user.target
     echo "Systemd service created."
 }
 
+# Function to create the web panel systemd service
+create_web_panel_service() {
+    local web_service_file="/etc/systemd/system/dnsproxy-web-panel.service"
+    echo "Creating systemd service for DNS Proxy Web Panel..."
+    local web_service_content="
+[Unit]
+Description=DNS Proxy Web Panel
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /etc/dnsproxy/web_panel.py
+Restart=always
+User=root
+Environment=FLASK_APP=/etc/dnsproxy/web_panel.py
+
+[Install]
+WantedBy=multi-user.target
+"
+    echo "$web_service_content" | run_command sudo tee "$web_service_file" > /dev/null
+    run_command sudo systemctl daemon-reload
+    run_command sudo systemctl enable dnsproxy-web-panel
+    run_command sudo systemctl start dnsproxy-web-panel.service
+    echo "Systemd service for DNS Proxy Web Panel created and started."
+}
+
 # Main installation function
 install_dnsproxy() {
     install_packages
@@ -258,6 +283,7 @@ install_dnsproxy() {
     create_systemd_service
     update_dnsproxy_shell_script
     run_command sudo systemctl start $SERVICE_NAME
+    create_web_panel_service  # Added this line to create the web panel service
     echo "DNSProxy installation and setup completed."
     echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|status ip|uninstall}' to manage the service."
 }
@@ -273,7 +299,7 @@ SERVICE_NAME="$SERVICE_NAME"
 WHITELIST_FILE="$WHITELIST_FILE"
 ALLOWED_IPS_FILE="$ALLOWED_IPS_FILE"
 DNS_PORT=$DNS_PORT
-IP_RESTRICTION_FLAG="$IP_RESTRICTION_FLAG"
+IP_RESTRICTION_FLAG="$IP_REstriction_flag"
 
 $(declare -f get_server_ip)
 $(declare -f switch_to_mode)

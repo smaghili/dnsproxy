@@ -123,7 +123,6 @@
     <div class="container">
         <h1>DNS Proxy Management Panel</h1>
 
-
         <div id="message" class="message"></div>
 
         <div class="status-panel">
@@ -216,8 +215,10 @@
             })
             .then(response => {
                 if(response.ok){
-                    updateStatus();
-                    showMessage('success', 'Service toggled successfully');
+                    setTimeout(() => {
+                        updateStatus();
+                        showMessage('success', 'Service toggled successfully');
+                    }, 1000);
                 } else {
                     showMessage('error', 'Failed to toggle service');
                 }
@@ -287,7 +288,6 @@
             });
         }
 
-
         updateStatus();
         fetch('/api/whitelist').then(response => response.json()).then(data => {
             document.getElementById('whitelist').value = data.domains.join('\n');
@@ -295,7 +295,6 @@
         fetch('/api/allowed_ips').then(response => response.json()).then(data => {
             document.getElementById('allowed_ips').value = data.ips.join('\n');
         });
-
 
         setInterval(updateStatus, 5000);
     </script>

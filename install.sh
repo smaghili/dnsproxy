@@ -128,7 +128,7 @@ switch_to_mode() {
 
     # Check the IP restriction flag
     local use_allowed_ips="false"
-    if [ -f "$IP_RESTRICTION_FLAG" ]; then
+    if [ -f "$IP_RESTRICTION_FLAG" ] && [ -s "$IP_RESTRICTION_FLAG" ]; then
         use_allowed_ips="true"
     fi
 
@@ -182,7 +182,8 @@ get_current_mode() {
 # Function to enable IP restriction
 enable_ip_restriction() {
     echo "Enabling IP restriction..."
-    touch "$IP_RESTRICTION_FLAG"
+    mkdir -p "$(dirname "$IP_RESTRICTION_FLAG")"
+    echo "enabled" > "$IP_RESTRICTION_FLAG"
     local current_mode=$(get_current_mode)
     switch_to_mode "$current_mode"
 }
@@ -197,7 +198,7 @@ disable_ip_restriction() {
 
 # Function to check IP restriction status
 ip_restriction_status() {
-    if sudo systemctl show -p ExecStart --value $SERVICE_NAME.service | grep -q -- "--allowed-ips"; then
+    if [ -f "$IP_RESTRICTION_FLAG" ] && [ -s "$IP_RESTRICTION_FLAG" ] && sudo systemctl show -p ExecStart --value $SERVICE_NAME.service | grep -q -- "--allowed-ips"; then
         echo "IP restriction is currently enabled."
     else
         echo "IP restriction is currently disabled."
@@ -283,7 +284,7 @@ install_dnsproxy() {
     create_systemd_service
     update_dnsproxy_shell_script
     run_command sudo systemctl start $SERVICE_NAME
-    create_web_panel_service  # Added this line to create the web panel service
+    create_web_panel_service
     echo "DNSProxy installation and setup completed."
     echo "Use 'dnsproxy {start|stop|restart|status|start --whitelist|start --dns-allow-all|enable ip|disable ip|status ip|uninstall}' to manage the service."
 }
@@ -299,7 +300,7 @@ SERVICE_NAME="$SERVICE_NAME"
 WHITELIST_FILE="$WHITELIST_FILE"
 ALLOWED_IPS_FILE="$ALLOWED_IPS_FILE"
 DNS_PORT=$DNS_PORT
-IP_RESTRICTION_FLAG="$IP_REstriction_flag"
+IP_RESTRICTION_FLAG="$IP_RESTRICTION_FLAG"
 
 $(declare -f get_server_ip)
 $(declare -f switch_to_mode)

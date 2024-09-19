@@ -20,12 +20,23 @@ def index():
 @app.route('/api/status')
 def get_status():
     status = run_command("systemctl is-active dnsproxy")
-    mode = run_command("dnsproxy status | grep 'ExecStart=' | awk -F'--' '{print $NF}'")
+    service_file = "/etc/systemd/system/dnsproxy.service"
+    
+    with open(service_file, 'r') as f:
+        service_content = f.read()
+    
+    if "--dns-allow-all" in service_content:
+        mode = "DNS Allow All"
+    elif "--whitelist" in service_content:
+        mode = "Whitelist"
+    else:
+        mode = "Unknown"
+    
     ip_restriction = "ACTIVE" if os.path.exists(IP_RESTRICTION_FLAG) else "INACTIVE"
     
     return jsonify({
         "status": status, 
-        "mode": "Whitelist" if "whitelist" in mode else "DNS Allow All",
+        "mode": mode,
         "ip_restriction": ip_restriction
     })
 

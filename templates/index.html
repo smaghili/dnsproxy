@@ -19,10 +19,15 @@
             border-radius: 8px; 
             box-shadow: 0 0 10px rgba(0,0,0,0.1); 
         }
+        .header {
+            position: relative;
+            text-align: center;
+            margin-bottom: 20px;
+        }
         h1 { 
             color: #333; 
-            text-align: center; 
-            margin-top: 0;
+            margin: 0;
+            display: inline-block;
         }
         h2 {
             margin-top: 20px;
@@ -45,6 +50,13 @@
         .mode { background-color: #2196F3; }
         .update-button { 
             background-color: #3498db;
+        }
+        .logout-button {
+            background-color: #f44336;
+            position: absolute;
+            right: 0;
+            top: 50%;
+            transform: translateY(-50%);
         }
         textarea { 
             width: 100%; 
@@ -102,7 +114,6 @@
         .ip-restriction-inactive { 
             background-color: #f44336;
         }
-
         .message {
             padding: 10px;
             margin-bottom: 20px;
@@ -121,7 +132,10 @@
 </head>
 <body>
     <div class="container">
-        <h1>DNS Proxy Management Panel</h1>
+        <div class="header">
+            <h1>DNS Proxy Management Panel</h1>
+            <button class="logout-button" onclick="logout()">Logout</button>
+        </div>
 
         <div id="message" class="message"></div>
 
@@ -286,6 +300,10 @@
             .catch(() => {
                 showMessage('error', 'An error occurred while updating Allowed IPs');
             });
+        }
+
+        function logout() {
+            window.location.href = '/logout';
         }
 
         updateStatus();

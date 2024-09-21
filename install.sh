@@ -209,12 +209,20 @@ ip_restriction_status() {
 uninstall_dnsproxy() {
     echo "Uninstalling DNSProxy..."
 
+    # Stop and disable the main DNSProxy service
     sudo systemctl stop $SERVICE_NAME.service
     sudo systemctl disable $SERVICE_NAME.service
 
+    # Stop and disable the web panel service
+    sudo systemctl stop dnsproxy-web-panel.service
+    sudo systemctl disable dnsproxy-web-panel.service
+
+    # Remove service files
     sudo rm -f /etc/systemd/system/$SERVICE_NAME.service
+    sudo rm -f /etc/systemd/system/dnsproxy-web-panel.service
     sudo systemctl daemon-reload
 
+    # Remove installation files and directories
     sudo rm -rf $INSTALL_DIR
     sudo rm -f $SCRIPT_PATH
     sudo rm -f $DNSPROXY_SHELL_SCRIPT
